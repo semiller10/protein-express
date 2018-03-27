@@ -1,5 +1,5 @@
 # protein-express
-Compare proteomic data to metagenomic bins to understand differential protein expression by taxonomic groups
+Compare proteomic data to metagenomic bins to understand patterns of protein expression across taxonomic groups
 
 ## Dependencies
 Include these in the path
