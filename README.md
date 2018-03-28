@@ -30,4 +30,4 @@ Table (tsv with header) relating each proteome name to a labeled state , e.g., <
 | proteome2 | min_soil    |
 
 - -t, --threads <br />
-Number of threads
+Number of threads, default = 1
