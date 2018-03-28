@@ -311,9 +311,9 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp):
     bin_name = os.path.basename(blast_db_fp)
     bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
     try:
-        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0, dtype={'qseqid': str})
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
     except FileNotFoundError:
-        bin_df = pd.DataFrame(columns=['qfile'] + blast_table_hdrs)
+        bin_df = pd.DataFrame(columns=bin_table_hdrs)
 
     # Remove any prior entries from the proteomic dataset under consideration
     if prot_name in bin_df['qfile'].tolist():
