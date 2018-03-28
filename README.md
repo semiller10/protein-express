@@ -8,6 +8,7 @@ Include these in the path
 - prodigal
 
 ## Arguments
+### Required
 - -p, --prot_dirs <br />
 List of directories for different proteomic datasets <br />
 Directory name must be the proteome name found in filenames, e.g., proteome1 <br />
@@ -17,6 +18,9 @@ Necessary files in each directory: <br />
   - Corresponding fastas of the translated genes that produced PSMs (e.g., proteome1.metagenome1.reads.fasta, proteome1.metagenome1.DBGraphPep2Pro.tsv)
 - -b, --bin_dir <br />
 Directory solely containing metagenomic bin fastas <br />
+- -o, --out <br />
+Output directory
+### Optional
 - -s, --state <br />
 Table (tsv with header) relating each proteome name to a labeled state , e.g., <br />
 
@@ -24,9 +28,6 @@ Table (tsv with header) relating each proteome name to a labeled state , e.g., <
 |:---------:|:-----------:|
 | proteome1 | org_soil    |
 | proteome2 | min_soil    |
-
-- -o, --out <br />
-Output directory
 
 - -t, --threads <br />
 Number of threads
