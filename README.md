@@ -27,3 +27,6 @@ Table (tsv with header) relating each proteome name to a labeled state , e.g., <
 
 - -o, --out <br />
 Output directory
+
+- -t, --threads <br />
+Number of threads
