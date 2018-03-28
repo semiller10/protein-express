@@ -61,7 +61,10 @@ bin_table_hdrs = [
     'sstart', 
     'send', 
     'evalue', 
-    'bitscore'
+    'bitscore', 
+    'predicted name', 
+    'cog cat', 
+    'eggnog hmm desc'    
 ]
 
 def main():
@@ -85,7 +88,7 @@ def main():
             query_fasta_fps.append(make_query_fasta(prot_dir))
 
     for blast_db_fp in blast_db_fps:
-        for query_fasta_fp in query_fasta_fps:
+        for i, query_fasta_fp in enumerate(query_fasta_fps):
             prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
             out_fp = os.path.join(
@@ -103,10 +106,13 @@ def main():
                     '-outfmt', '6', 
                     '-comp_based_stats', '0'
                 ])
-            parse_blast_table(prot_name, out_fp, blast_db_fp)
+            postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
+            parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp)
 
         bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
-        
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
+        bin_df = bin_df[['qfile', 'scan', 'bitscore']]
+
 
 def get_args():
     '''
@@ -294,7 +300,7 @@ def make_query_fasta(prot_dir):
             
     return query_fasta_fp
 
-def parse_blast_table(prot_name, out_fp, blast_db_fp):
+def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     '''
     Add BLAST table to merged table for all searches against bin
     '''
@@ -307,6 +313,16 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp):
     blast_df.drop('qseqid', axis=1, inplace=True)
     blast_df = blast_df[blast_df.groupby('scan')['evalue'].min() == blast_df['evalue']]
     blast_df = blast_df.groupby('scan', as_index=False).first()
+    blast_df.sort_values('scan', inplace=True)
+
+    postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)
+    postnovo_df['scan'] = postnovo_df['scan_list'].apply(lambda s: int(s.split(',')[0]))
+    postnovo_df.sort_values('scan', inplace=True)
+    postnovo_df.set_index('scan', inplace=True)
+    postnovo_df = postnovo_df.loc[blast_df['scan'].tolist()].reset_index()
+    postnovo_df = postnovo_df[['scan', 'predicted name', 'cog cat', 'eggnog hmm desc']]
+    assert len(blast_df) == len(postnovo_df)
+    blast_df = blast_df.merge(postnovo_df, on='scan')
 
     bin_name = os.path.basename(blast_db_fp)
     bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
