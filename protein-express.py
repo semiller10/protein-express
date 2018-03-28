@@ -51,14 +51,15 @@ blast_table_hdrs = [
 def main():
 
     args = get_args()
-    global out_dir = args.out
+    global out_dir
+    out_dir = args.out
 
     blast_db_fps = []
-    for fasta_fp in os.listdir(args.bin_dir):
-        blast_db_fps.append(make_blast_db(fasta_fp))
+    for fasta_basename in os.listdir(args.bin_dir):
+        blast_db_fps.append(make_blast_db(os.path.join(args.bin_dir, fasta_basename)))
 
     query_fasta_fps = []
-    for prot_dir in args.prot_dir:
+    for prot_dir in args.prot_dirs:
         prot_name = os.path.normpath(os.path.basename(prot_dir))
         query_fasta_fp = os.path.join(args.out, prot_name + '.blastp_queries.faa')
         if os.path.exists(query_fasta_fp):
@@ -69,7 +70,7 @@ def main():
 
     for blast_db_fp in blast_db_fps:
         for query_fasta_fp in query_fasta_fps:
-            prot_name = os.path.basename(query_fasta_fp).remove('.blastp_queries.faa')
+            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
             out_fp = os.path.join(
                 search_dir, prot_name + '.' + os.path.basename(blast_db_fp) + '.blastp_hits.out'
@@ -78,7 +79,7 @@ def main():
                 print(out_fp, 'already exists', flush=True)
             else:
                 subprocess.call([
-                    blastp_bin, 
+                    'blastp', 
                     '-db', blast_db_fp, 
                     '-query', query_fasta_fp, 
                     '-out', out_fp, 
@@ -86,39 +87,74 @@ def main():
                     '-outfmt', '6', 
                     '-comp_based_stats', '0'
                 ])
-            parse_blast_table(out_fp, blast_db_fp)
+            parse_blast_table(prot_name, out_fp, blast_db_fp)
 
-            # Add BLAST table to file of merged tables for the pop bin
-            # Remove any prior entries from the proteome under consideration
-            pop_bin_name = os.path.basename(blast_db)
-            merged_table_path = os.path.join(combined_output_dir, pop_bin_name + '.blast_output.txt')
-            merged_table_hdrs = ['qfile'] + blast_table_hdrs[:-1] + blast_table_hdrs[-1:]
-            try:
-                merged_table = pd.read_csv(merged_table_path, sep='\t', header=0, dtype={'qseqid': str})
-            except FileNotFoundError:
-                merged_table = pd.DataFrame(columns=merged_table_hdrs)
-            if proteome_name in merged_table['qfile'].tolist():
-                merged_table = merged_table[merged_table['qfile'] != proteome_name]
-            blast_table['qfile'] = proteome_name
-            merged_table = pd.concat([merged_table, blast_table], ignore_index=True)
-            merged_table = merged_table[merged_table_hdrs]
-            merged_table.to_csv(merged_table_path, sep='\t', index=False)    
+        bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
+        
 
-def parse_blast_table(out_fp, blast_db_fp):
+def get_args():
+    '''
+    Get command line arguments
+    '''
 
-    blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
-    blast_df = blast_df.groupby('qseqid', as_index=False).first()
-    blast_df = blast_df[blast_df['length'] >= 9]
-    blast_df = blast_df[blast_df['evalue'] <= 0.01]
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        '-p', 
+        '--prot_dirs', 
+        nargs='+', 
+        help='List of directories for each proteomic dataset'
+    )
+    parser.add_argument(
+        '-b', 
+        '--bin_dir', 
+        help='Directory exclusively containing bin fastas'
+    )
+    parser.add_argument(
+        '-o', 
+        '--out', 
+        help='Output directory'
+    )
 
-    bin_name = os.path.basename(blast_db_fp)
-    bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
+    args = parser.parse_args()
+
+    return args
+
+def make_blast_db(fasta_fp):
+    '''
+    Make blast database from proteins in fasta
+    '''
+
+    fasta_dir = os.path.dirname(fasta_fp)
+    fasta_name = os.path.splitext(os.path.basename(fasta_fp))[0]
+    gene_coords_fp = os.path.join(out_dir, fasta_name + '.gene_coords.gbk')
+    proteins_fp = os.path.join(out_dir, fasta_name + '.faa')
+    # Run Prodigal to predict genes
+    if not os.path.exists(proteins_fp):
+        subprocess.call([
+            'prodigal', 
+            '-i', fasta_fp, 
+            '-o', gene_coords_fp, 
+            '-a', proteins_fp
+        ])
+    else:
+        print('prodigal output', proteins_fp, 'already exists', flush=True)
+
+    # Make a blast database from the proteins
+    blast_db_dir = os.path.join(out_dir, fasta_name + '.blast_db')
+    blast_db_fp = os.path.join(blast_db_dir, fasta_name)
     try:
-        bin_table_df = pd.read_csv(bin_table_fp, sep='\t', header=0, dtype={'qseqid': str})
-    except FileNotFoundError:
-        bin_table_df = pd.DataFrame(columns=['qfile'] + blast_table_hdrs)
+        os.mkdir(blast_db_dir)
+        subprocess.call([
+            'makeblastdb', 
+            '-dbtype', 'prot', 
+            '-in', proteins_fp, 
+            '-out', blast_db_fp, 
+            '-hash_index'
+        ])         
+    except FileExistsError:
+        print('blast database', blast_db_fp, 'already exists', flush=True)
 
-    return
+    return blast_db_fp    
 
 def make_query_fasta(prot_dir):
     '''
@@ -133,7 +169,7 @@ def make_query_fasta(prot_dir):
     # Peptides may match a subsequence of a longer ORF from another dataset
     redun_predict_origins = reported_peptide_df['also_contains_predicts_from'].tolist()
     redun_predict_origins = [
-        [''] if pd.isnull(s) else s.split(',') for s in redun_predict_origins]
+        [''] if pd.isnull(s) else s.split(',') for s in redun_predict_origins
     ]
 
     predict_origins = []
@@ -229,82 +265,45 @@ def make_query_fasta(prot_dir):
         orfs_scan = orfs[first_scan]
         if orfs_scan:
             for i, orf in enumerate(orfs_scan):
-                seq_id = '>' + str(first_scan) + '.' + str(j) + '\n'
+                seq_id = '>' + str(first_scan) + '.' + str(i) + '\n'
                 query_fasta.append(seq_id)
                 query_fasta.append(orf + '\n')
 
     search_dir = os.path.join(out_dir, prot_name + '.bin_search')
     subprocess.call(['mkdir', '-p', search_dir])
-    query_fasta_fp = os.path.join(out_dir, search_dir + '.blastp_queries.faa')
+    query_fasta_fp = os.path.join(search_dir, prot_name + '.blastp_queries.faa')
     with open(query_fasta_fp, 'w') as handle:
         for line in query_fasta:
             handle.write(line)
             
     return query_fasta_fp
 
-def make_blast_db(fasta_fp):
+def parse_blast_table(prot_name, out_fp, blast_db_fp):
     '''
-    Make blast database from proteins in fasta
+    Add BLAST table to merged table for all searches against bin
     '''
 
-    fasta_dir = os.path.dirname(fasta_fp)
-    fasta_name = os.path.splitext(os.path.basename(fasta_fp))[0]
-    gene_coords_fp = os.path.join(fasta_dir, fasta_name + '.gene_coords.gbk')
-    proteins_fp = os.path.join(fasta_dir, fasta_name + '.faa')
-    # Run Prodigal to predict genes
-    if not os.path.exists(proteins):
-        subprocess.call([
-            'prodigal', 
-            '-i', fasta_fp, 
-            '-o', gene_coords_fp, 
-            '-a', proteins_fp
-        ])
-    else:
-        print('prodigal output', proteins_fp, 'already exists', flush=True)
+    blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
+    blast_df = blast_df.groupby('qseqid', as_index=False).first()
+    blast_df = blast_df[blast_df['length'] >= 9]
+    blast_df = blast_df[blast_df['evalue'] <= 0.01]
 
-    # Make a blast database from the proteins
-    blast_db_dir = os.path.join(out_dir, fasta_name + '.blast_db')
-    blast_db_fp = os.path.join(out_dir, fasta_name)
+    bin_name = os.path.basename(blast_db_fp)
+    bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
     try:
-        os.mkdir(blast_db_dir)
-        subprocess.call([
-            'makeblastdb', 
-            '-dbtype', 'prot', 
-            '-in', proteins_f, 
-            '-out', blast_db_fp, 
-            '-hash_index'
-        ])         
-    except FileExistsError:
-        print('blast database', blast_db_fp, 'already exists', flush=True)
-    
-    return blast_db_fp
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0, dtype={'qseqid': str})
+    except FileNotFoundError:
+        bin_df = pd.DataFrame(columns=['qfile'] + blast_table_hdrs)
 
-def get_args():
-    '''
-    Get command line arguments
-    '''
+    # Remove any prior entries from the proteomic dataset under consideration
+    if prot_name in bin_df['qfile'].tolist():
+        bin_df = bin_df[bin_df['qfile'] != prot_name]
+    blast_df['qfile'] = prot_name
+    bin_df = pd.concat([bin_df, blast_df], ignore_index=True)
+    bin_df = bin_df[['qfile'] + blast_table_hdrs]
+    bin_df.to_csv(bin_table_fp, sep='\t', index=False)
 
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        '-p', 
-        '--prot_dirs', 
-        nargs='+', 
-        help='List of directories for each proteomic dataset'
-    )
-    parser.add_argument(
-        '-b', 
-        '--bin_dir', 
-        help='Directory exclusively containing bin fastas'
-    )
-    parser.add_argument(
-        '-o', 
-        '--out', 
-        help='Output directory'
-    )
-
-    args = parser.parse_args()
-
-    return args
+    return    
 
 if __name__ == '__main__':
     main()
