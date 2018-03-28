@@ -18,7 +18,7 @@ Necessary files in each directory: <br />
 - -b, --bin_dir <br />
 Directory solely containing metagenomic bin fastas <br />
 - -e, --env <br />
-Table (tsv) relating each proteome name (col 1) to an environment (col 2), e.g. <br />
+Table (tsv) relating each proteome name to an environment , e.g., <br />
 
 | Proteome  | Environment |
 |:---------:|:-----------:|
