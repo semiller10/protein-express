@@ -17,8 +17,8 @@ Necessary files in each directory: <br />
   - Corresponding fastas of the translated genes that produced PSMs (e.g., proteome1.metagenome1.reads.fasta, proteome1.metagenome1.DBGraphPep2Pro.tsv)
 - -b, --bin_dir <br />
 Directory solely containing metagenomic bin fastas <br />
-- -e, --env <br />
-Table (tsv) relating each proteome name to an environment , e.g., <br />
+- -s, --state <br />
+Table (tsv with header) relating each proteome name to a labeled state , e.g., <br />
 
 | Proteome  | Environment |
 |:---------:|:-----------:|
