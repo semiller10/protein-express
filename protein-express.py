@@ -47,6 +47,22 @@ blast_table_hdrs = [
     'evalue', 
     'bitscore'
 ]
+bin_table_hdrs = [
+    'qfile', 
+    'scan', 
+    'seqnum', 
+    'sseqid', 
+    'pident', 
+    'length', 
+    'mismatch', 
+    'gapopen', 
+    'qstart', 
+    'qend', 
+    'sstart', 
+    'send', 
+    'evalue', 
+    'bitscore'
+]
 
 def main():
 
@@ -284,9 +300,13 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp):
     '''
 
     blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
-    blast_df = blast_df.groupby('qseqid', as_index=False).first()
     blast_df = blast_df[blast_df['length'] >= 9]
-    blast_df = blast_df[blast_df['evalue'] <= 0.01]
+    blast_df = blast_df[blast_df['evalue'] <= 0.01]    
+    blast_df['scan'] = blast_df['qseqid'].apply(lambda s: s.split('.')[0])
+    blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: s.split('.')[1])
+    blast_df.drop('qseqid', axis=1, inplace=True)
+    blast_df = blast_df[blast_df.groupby('scan')['evalue'].min() == blast_df['evalue']]
+    blast_df = blast_df.groupby('scan', as_index=False).first()
 
     bin_name = os.path.basename(blast_db_fp)
     bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
@@ -300,10 +320,10 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp):
         bin_df = bin_df[bin_df['qfile'] != prot_name]
     blast_df['qfile'] = prot_name
     bin_df = pd.concat([bin_df, blast_df], ignore_index=True)
-    bin_df = bin_df[['qfile'] + blast_table_hdrs]
+    bin_df = bin_df[bin_df_hdrs]
     bin_df.to_csv(bin_table_fp, sep='\t', index=False)
 
-    return    
+    return
 
 if __name__ == '__main__':
     main()
