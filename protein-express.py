@@ -26,7 +26,9 @@
 
 import argparse
 from collections import OrderedDict
+from functools import partial
 from glob import glob
+import multiprocessing as mp
 import os
 import os.path
 import pandas as pd
@@ -62,9 +64,9 @@ bin_table_hdrs = [
     'send', 
     'evalue', 
     'bitscore', 
-    'predicted name', 
-    'cog cat', 
-    'eggnog hmm desc'    
+    'protein', 
+    'cog', 
+    'descrip'
 ]
 
 def main():
@@ -73,9 +75,11 @@ def main():
     global out_dir
     out_dir = args.out
 
+    run_prodigal(args.bin_dir, args.threads)
+
     blast_db_fps = []
-    for fasta_basename in os.listdir(args.bin_dir):
-        blast_db_fps.append(make_blast_db(os.path.join(args.bin_dir, fasta_basename)))
+    for bin_basename in os.listdir(args.bin_dir):
+        blast_db_fps.append(make_blast_db(os.path.join(args.bin_dir, bin_basename)))
 
     query_fasta_fps = []
     for prot_dir in args.prot_dirs:
@@ -87,7 +91,11 @@ def main():
         else:
             query_fasta_fps.append(make_query_fasta(prot_dir))
 
+    bin_table_fps = []
     for blast_db_fp in blast_db_fps:
+        bin_name = os.path.basename(blast_db_fp)
+        bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
+        bin_table_fps.append(bin_table_fp)
         for i, query_fasta_fp in enumerate(query_fasta_fps):
             prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
@@ -97,22 +105,11 @@ def main():
             if os.path.exists(out_fp):
                 print(out_fp, 'already exists', flush=True)
             else:
-                subprocess.call([
-                    'blastp', 
-                    '-db', blast_db_fp, 
-                    '-query', query_fasta_fp, 
-                    '-out', out_fp, 
-                    '-evalue', '0.01', 
-                    '-outfmt', '6', 
-                    '-comp_based_stats', '0'
-                ])
+                run_blastp(blast_db_fp, query_fasta_fp, out_fp, args.threads)
             postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
             parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp)
 
-        bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
-        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
-        bin_df = bin_df[['qfile', 'scan', 'bitscore']]
-
+    compare_bins(bin_table_fps)
 
 def get_args():
     '''
@@ -132,38 +129,75 @@ def get_args():
         help='Directory exclusively containing bin fastas'
     )
     parser.add_argument(
+        '-s', 
+        '--state', 
+        help='Table relating each proteome name to a state'
+    )
+    parser.add_argument(
         '-o', 
         '--out', 
         help='Output directory'
+    )
+    parser.add_argument(
+        '-t', 
+        '--threads', 
+        type=int, 
+        default=1, 
+        help='Number of threads'
     )
 
     args = parser.parse_args()
 
     return args
 
-def make_blast_db(fasta_fp):
+def run_prodigal(bin_dir, threads):
+
+    bin_basenames = os.listdir(bin_dir)
+    bin_fps = [os.path.join(bin_dir, bin_basename) for bin_basename in bin_basenames]
+
+    partial_prodigal_worker = partial(
+        prodigal_worker, out_dir=out_dir
+    )
+    mp_pool = mp.Pool(threads)
+    mp_pool.map(partial_prodigal_worker, bin_fps)
+    mp_pool.close()
+    mp_pool.join()
+
+    return
+
+def prodigal_worker(bin_fp, out_dir):
+
+    bin_dir = os.path.dirname(bin_fp)
+    bin_name = os.path.splitext(os.path.basename(bin_fp))[0]
+    gene_coords_fp = os.path.join(out_dir, bin_name + '.gene_coords.gbk')
+    proteins_fp = os.path.join(out_dir, bin_name + '.faa')
+
+    if not os.path.exists(proteins_fp):
+        fnull = open(os.devnull, 'w')
+        subprocess.call([
+            'prodigal', 
+            '-i', bin_fp, 
+            '-o', gene_coords_fp, 
+            '-a', proteins_fp
+        ], stdout=fnull, stderr=fnull)
+        fnull.close()
+    else:
+        print('prodigal output', proteins_fp, 'already exists', flush=True)        
+
+    return
+
+def make_blast_db(bin_fp):
     '''
     Make blast database from proteins in fasta
     '''
 
-    fasta_dir = os.path.dirname(fasta_fp)
-    fasta_name = os.path.splitext(os.path.basename(fasta_fp))[0]
-    gene_coords_fp = os.path.join(out_dir, fasta_name + '.gene_coords.gbk')
-    proteins_fp = os.path.join(out_dir, fasta_name + '.faa')
-    # Run Prodigal to predict genes
-    if not os.path.exists(proteins_fp):
-        subprocess.call([
-            'prodigal', 
-            '-i', fasta_fp, 
-            '-o', gene_coords_fp, 
-            '-a', proteins_fp
-        ])
-    else:
-        print('prodigal output', proteins_fp, 'already exists', flush=True)
+    bin_dir = os.path.dirname(bin_fp)
+    bin_name = os.path.splitext(os.path.basename(bin_fp))[0]
 
     # Make a blast database from the proteins
-    blast_db_dir = os.path.join(out_dir, fasta_name + '.blast_db')
-    blast_db_fp = os.path.join(blast_db_dir, fasta_name)
+    blast_db_dir = os.path.join(out_dir, bin_name + '.blast_db')
+    blast_db_fp = os.path.join(blast_db_dir, bin_name)
+    proteins_fp = os.path.join(out_dir, bin_name + '.faa')
     try:
         os.mkdir(blast_db_dir)
         subprocess.call([
@@ -300,6 +334,71 @@ def make_query_fasta(prot_dir):
             
     return query_fasta_fp
 
+def run_blastp(blast_db_fp, query_fasta_fp, out_fp, num_threads):
+
+    print(
+        'Aligning', os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', ''), 
+        'to', os.path.basename(blast_db_fp), 
+        flush=True
+    )
+
+    tmp_dir = os.path.join(os.path.dirname(query_fasta_fp), 'tmp')
+    query_name = os.path.splitext(os.path.basename(query_fasta_fp))[0]
+    subprocess.call(['mkdir', tmp_dir])
+
+    with open(query_fasta_fp) as handle:
+        fasta = handle.readlines()
+
+    split_size = len(fasta) // num_threads + ((len(fasta) // num_threads) % 2)
+    file_num = 0
+    handle = open(os.path.join(tmp_dir, query_name + '.1.faa'), 'w')
+    split_fasta_fps = []
+    for i, line in enumerate(fasta):
+        if i % split_size == 0 and file_num < num_threads:
+            file_num += 1
+            split_fasta_fp = os.path.join(tmp_dir, query_name + '.' + str(file_num) + '.faa')
+            split_fasta_fps.append(split_fasta_fp)
+            handle.close()
+            handle = open(split_fasta_fp, 'w')
+        handle.write(line)
+    handle.close()
+
+    partial_blastp_worker = partial(
+        blastp_worker, blast_db_fp=blast_db_fp
+    )
+    mp_pool = mp.Pool(num_threads)
+    mp_pool.map(partial_blastp_worker, split_fasta_fps)
+    mp_pool.close()
+    mp_pool.join()
+
+    blast_table_df = pd.DataFrame()
+    for split_fasta_fp in split_fasta_fps:
+        split_blast_table_fp = os.path.splitext(split_fasta_fp)[0] + '.out'
+        blast_table_df = pd.concat(
+            [blast_table_df, pd.read_csv(split_blast_table_fp, sep='\t', header=None)]
+        )
+    blast_table_df.to_csv(out_fp, sep='\t', index=False, header=False)
+    
+    subprocess.call(['rm', '-r', tmp_dir])
+
+    return
+
+def blastp_worker(query_fasta_fp, blast_db_fp):
+
+    split_blast_table_fp = os.path.splitext(query_fasta_fp)[0] + '.out'
+
+    subprocess.call([
+        'blastp', 
+        '-db', blast_db_fp, 
+        '-query', query_fasta_fp, 
+        '-out', split_blast_table_fp, 
+        '-evalue', '0.01', 
+        '-outfmt', '6', 
+        '-comp_based_stats', '0'
+    ])
+
+    return
+
 def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     '''
     Add BLAST table to merged table for all searches against bin
@@ -308,10 +407,10 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
     blast_df = blast_df[blast_df['length'] >= 9]
     blast_df = blast_df[blast_df['evalue'] <= 0.01]    
-    blast_df['scan'] = blast_df['qseqid'].apply(lambda s: s.split('.')[0])
+    blast_df['scan'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[0]))
     blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: s.split('.')[1])
     blast_df.drop('qseqid', axis=1, inplace=True)
-    blast_df = blast_df[blast_df.groupby('scan')['evalue'].min() == blast_df['evalue']]
+    blast_df = blast_df[blast_df.groupby('scan')['evalue'].transform(min) == blast_df['evalue']]
     blast_df = blast_df.groupby('scan', as_index=False).first()
     blast_df.sort_values('scan', inplace=True)
 
@@ -321,8 +420,13 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     postnovo_df.set_index('scan', inplace=True)
     postnovo_df = postnovo_df.loc[blast_df['scan'].tolist()].reset_index()
     postnovo_df = postnovo_df[['scan', 'predicted name', 'cog cat', 'eggnog hmm desc']]
+    postnovo_df.rename(
+        columns={'predicted name': 'protein', 'cog cat': 'cog', 'eggnog hmm desc': 'descrip'}, 
+        inplace=True
+    )
     assert len(blast_df) == len(postnovo_df)
     blast_df = blast_df.merge(postnovo_df, on='scan')
+    blast_df['scan'] = blast_df['scan'].apply(str)
 
     bin_name = os.path.basename(blast_db_fp)
     bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
@@ -336,8 +440,40 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
         bin_df = bin_df[bin_df['qfile'] != prot_name]
     blast_df['qfile'] = prot_name
     bin_df = pd.concat([bin_df, blast_df], ignore_index=True)
-    bin_df = bin_df[bin_df_hdrs]
+    bin_df = bin_df[bin_table_hdrs]
     bin_df.to_csv(bin_table_fp, sep='\t', index=False)
+
+    return bin_table_fp
+
+def compare_bins(bin_table_fps):
+
+    compar_df = pd.DataFrame(columns=['protein', 'descrip'])
+    for bin_table_fp in bin_table_fps:
+        bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[['protein', 'descrip', 'bitscore']]
+        protein_gb = bin_df[pd.notnull(bin_df['protein'])].groupby('protein')
+        protein_df = protein_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
+        protein_df['protein'] = [protein for protein, _ in protein_gb]
+        protein_df['descrip'] = protein_gb['descrip'].agg(lambda d: d.value_counts().index[0])
+        protein_df.reset_index(inplace=True, drop=True)
+        descrip_gb = bin_df[pd.isnull(bin_df['protein'])].groupby('descrip')
+        descrip_df = descrip_gb['bitscore'].agg(['mean', 'min', 'max', 'count']).reset_index()
+        descrip_df['descrip'] = [descrip for descrip, _ in descrip_gb]
+        bin_summary_df = pd.concat([protein_df, descrip_df])
+        bin_summary_df = bin_summary_df[['protein', 'descrip', 'mean', 'min', 'max', 'count']]
+        bin_summary_df['mean'] = bin_summary_df['mean'].round(1)
+        bin_summary_df.rename(
+            columns={
+                'mean': bin_name + '_mean', 
+                'min': bin_name + '_min', 
+                'max': bin_name + '_max', 
+                'count': bin_name + '_count'
+            }, 
+            inplace=True
+        )
+        compar_df = compar_df.merge(bin_summary_df, how='outer', on=['protein', 'descrip'])
+    compar_df_fp = os.path.join(out_dir, 'bin_compar.tsv')
+    compar_df.to_csv(compar_df_fp, sep='\t', index=False)
 
     return
 
