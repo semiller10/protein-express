@@ -84,7 +84,8 @@ def main():
     query_fasta_fps = []
     for prot_dir in args.prot_dirs:
         prot_name = os.path.normpath(os.path.basename(prot_dir))
-        query_fasta_fp = os.path.join(args.out, prot_name + '.blastp_queries.faa')
+        query_fasta_dir = os.path.join(out_dir, prot_name + '.bin_search')
+        query_fasta_fp = os.path.join(query_fasta_dir, prot_name + '.blastp_queries.faa')
         if os.path.exists(query_fasta_fp):
             query_fasta_fps.append(query_fasta_fp)
             print('Query path', query_fasta_fp, 'already exists', flush=True)
@@ -99,15 +100,15 @@ def main():
         for i, query_fasta_fp in enumerate(query_fasta_fps):
             prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
-            out_fp = os.path.join(
+            blast_table_fp = os.path.join(
                 search_dir, prot_name + '.' + os.path.basename(blast_db_fp) + '.blastp_hits.out'
             )
-            if os.path.exists(out_fp):
-                print(out_fp, 'already exists', flush=True)
+            if os.path.exists(blast_table_fp):
+                print(blast_table_fp, 'already exists', flush=True)
             else:
-                run_blastp(blast_db_fp, query_fasta_fp, out_fp, args.threads)
+                run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
             postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
-            parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp)
+            parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp)
 
     compare_bins(bin_table_fps)
 
@@ -334,7 +335,7 @@ def make_query_fasta(prot_dir):
             
     return query_fasta_fp
 
-def run_blastp(blast_db_fp, query_fasta_fp, out_fp, num_threads):
+def run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, num_threads):
 
     print(
         'Aligning', os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', ''), 
@@ -357,6 +358,7 @@ def run_blastp(blast_db_fp, query_fasta_fp, out_fp, num_threads):
         if i % split_size == 0 and file_num < num_threads:
             file_num += 1
             split_fasta_fp = os.path.join(tmp_dir, query_name + '.' + str(file_num) + '.faa')
+            print(split_fasta_fp, flush=True)
             split_fasta_fps.append(split_fasta_fp)
             handle.close()
             handle = open(split_fasta_fp, 'w')
@@ -371,14 +373,16 @@ def run_blastp(blast_db_fp, query_fasta_fp, out_fp, num_threads):
     mp_pool.close()
     mp_pool.join()
 
-    blast_table_df = pd.DataFrame()
+    blast_df = pd.DataFrame()
     for split_fasta_fp in split_fasta_fps:
         split_blast_table_fp = os.path.splitext(split_fasta_fp)[0] + '.out'
-        blast_table_df = pd.concat(
-            [blast_table_df, pd.read_csv(split_blast_table_fp, sep='\t', header=None)]
-        )
-    blast_table_df.to_csv(out_fp, sep='\t', index=False, header=False)
-    
+        try:
+            split_blast_df = pd.read_csv(split_blast_table_fp, sep='\t', header=None)
+            blast_df = pd.concat([blast_df, split_blast_df])
+        except pd.io.common.EmptyDataError:
+            pass
+    blast_df.to_csv(blast_table_fp, sep='\t', index=False, header=False)
+
     subprocess.call(['rm', '-r', tmp_dir])
 
     return
