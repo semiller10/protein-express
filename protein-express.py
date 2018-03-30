@@ -32,6 +32,7 @@ import multiprocessing as mp
 import os
 import os.path
 import pandas as pd
+import pickle as pkl
 import subprocess
 import sys
 
@@ -49,6 +50,9 @@ blast_table_hdrs = [
     'evalue', 
     'bitscore'
 ]
+trans_table = dict.fromkeys(
+    map(ord, ''.join(['.', '|', '^', '+', '-'] + [str(i) for i in range(10)])), None
+)
 ranks = [
     'species', 
     'genus', 
@@ -62,6 +66,7 @@ bin_table_hdrs = [
     'qfile', 
     'scan', 
     'seqnum', 
+    'peptide', 
     'sseqid', 
     'pident', 
     'length', 
@@ -94,12 +99,11 @@ def main():
     for prot_dir in args.prot_dirs:
         prot_name = os.path.normpath(os.path.basename(prot_dir))
         query_fasta_dir = os.path.join(out_dir, prot_name + '.bin_search')
-        query_fasta_fp = os.path.join(query_fasta_dir, prot_name + '.blastp_queries.faa')
-        if os.path.exists(query_fasta_fp):
-            query_fasta_fps.append(query_fasta_fp)
-            print('Query path', query_fasta_fp, 'already exists', flush=True)
+        query_fasta_fps.append(os.path.join(query_fasta_dir, prot_name + '.blastp_queries.faa'))
+        if os.path.exists(query_fasta_fps[-1]):
+            print('Query path', query_fasta_fps[-1], 'already exists', flush=True)
         else:
-            query_fasta_fps.append(make_query_fasta(prot_dir))
+            make_query_fasta(prot_dir)
 
     bin_table_fps = []
     for blast_db_fp in blast_db_fps:
@@ -115,9 +119,13 @@ def main():
             if os.path.exists(blast_table_fp):
                 print(blast_table_fp, 'already exists', flush=True)
             else:
-                run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
+                pass
+                # UNCOMMENT
+                # run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
             postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
-            parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp)
+            peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
+            parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp)
+        remove_redun_peps(bin_table_fps[-1])
 
     systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
@@ -280,8 +288,9 @@ def make_query_fasta(prot_dir):
         assert len(fasta_ids[ref_name]) == len(fasta_seqs[ref_name]), \
         fasta_fp + ' does not have an even number of lines'
 
-    # Record the scans and seq matches (hits) from each file of db search results
+    # Record the scans, peptides, and (partial) protein hits from each file of db search results
     db_search_scans = OrderedDict().fromkeys(fasta_ids)
+    db_search_peps = OrderedDict().fromkeys(fasta_ids)
     db_search_hits = OrderedDict().fromkeys(fasta_ids)
     for ref_name in fasta_ids:
         if '.reads' in ref_name:
@@ -292,6 +301,7 @@ def make_query_fasta(prot_dir):
         db_search_fp = os.path.join(prot_dir, db_search_basename)
         db_search_df = pd.read_csv(db_search_fp, sep='\t', header=0)
         db_search_scans[ref_name] = db_search_df['ScanNum'].tolist()
+        db_search_peps[ref_name] = db_search_df['Peptide'].tolist()
         l = []
         db_search_hits[ref_name] = l
         for hits_str in db_search_df['Protein'].tolist():
@@ -300,10 +310,13 @@ def make_query_fasta(prot_dir):
             ])
 
     first_scans = [int(scans_str.split(',')[0]) for scans_str in scans]
+    # It is possible that a spectrum may have been ID'd as different precursor peptide sequences
+    peps = OrderedDict([(first_scan, []) for first_scan in first_scans])
     orfs = OrderedDict([(first_scan, []) for first_scan in first_scans])
     orf_origins = OrderedDict([(first_scan, []) for first_scan in first_scans])
     for i, scan in enumerate(first_scans):
         # List of non-redundant ORFs matching the scan
+        peps_scan = peps[scan]
         orfs_scan = orfs[scan]
         orf_origins_scan = orf_origins[scan]
         best_predict_origins_scan = best_predict_origins[i]
@@ -311,7 +324,9 @@ def make_query_fasta(prot_dir):
             # The spectrum (scan) may not have matched the ref db
             try:
                 j = db_search_scans[ref_name].index(scan)
+                db_search_ref_peps = db_search_peps[ref_name]
                 for hit in db_search_hits[ref_name][j]:
+                    # I'm not sure if this next exception can ever occur...
                     try:
                         k = fasta_ids[ref_name].index(hit)
                         orf = fasta_seqs[ref_name][k]
@@ -320,12 +335,21 @@ def make_query_fasta(prot_dir):
                             x = orfs_scan.index(orf)
                             orf_origins_scan[x].append(ref_name)
                         except ValueError:
+                            # Assume that peptides are the same if ORFs are the same
+                            peps_scan.append(db_search_ref_peps[j])
                             orfs_scan.append(orf)
                             orf_origins_scan.append([ref_name])
                     except ValueError:
                         pass
             except (KeyError, ValueError):
                 pass
+
+    search_dir = os.path.join(out_dir, prot_name + '.bin_search')
+    subprocess.call(['mkdir', '-p', search_dir])
+
+    peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
+    with open(peps_fp, 'wb') as handle:
+        pkl.dump(peps, handle, 2)
 
     query_fasta = []
     for first_scan in first_scans:
@@ -336,14 +360,12 @@ def make_query_fasta(prot_dir):
                 query_fasta.append(seq_id)
                 query_fasta.append(orf + '\n')
 
-    search_dir = os.path.join(out_dir, prot_name + '.bin_search')
-    subprocess.call(['mkdir', '-p', search_dir])
     query_fasta_fp = os.path.join(search_dir, prot_name + '.blastp_queries.faa')
     with open(query_fasta_fp, 'w') as handle:
         for line in query_fasta:
             handle.write(line)
             
-    return query_fasta_fp
+    return
 
 def run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, num_threads):
 
@@ -412,7 +434,7 @@ def blastp_worker(query_fasta_fp, blast_db_fp):
 
     return
 
-def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
+def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp):
     '''
     Add BLAST table to merged table for all searches against bin
     '''
@@ -421,7 +443,7 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     blast_df = blast_df[blast_df['length'] >= 9]
     blast_df = blast_df[blast_df['evalue'] <= 0.01]    
     blast_df['scan'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[0]))
-    blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: s.split('.')[1])
+    blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[1]))
     blast_df.drop('qseqid', axis=1, inplace=True)
     blast_df = blast_df[blast_df.groupby('scan')['evalue'].transform(min) == blast_df['evalue']]
     blast_df = blast_df.groupby('scan', as_index=False).first()
@@ -441,6 +463,15 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     )
     assert len(blast_df) == len(postnovo_df)
     blast_df = blast_df.merge(postnovo_df, on='scan')
+
+    with open(peps_fp, 'rb') as handle:
+        peps = pkl.load(handle)
+    orf_peps = []
+    seq_nums = blast_df['seqnum'].tolist()
+    for i, scan in enumerate(blast_df['scan'].tolist()):
+        orf_peps.append(peps[scan][seq_nums[i]].translate(trans_table))
+    blast_df['peptide'] = orf_peps
+
     blast_df['scan'] = blast_df['scan'].apply(str)
 
     bin_name = os.path.basename(blast_db_fp)
@@ -459,6 +490,15 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     bin_df.to_csv(bin_table_fp, sep='\t', index=False)
 
     return bin_table_fp
+
+def remove_redun_peps(bin_table_fp):
+
+    bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
+    bin_df = bin_df.groupby('peptide', as_index=False).first()
+    bin_df = bin_df[bin_table_hdrs]
+    bin_df.to_csv(bin_table_fp, sep='\t', index=False)
+
+    return
 
 def systematize_annot(bin_table_fps):
     '''
@@ -562,24 +602,6 @@ def systematize_annot(bin_table_fps):
 
     return
 
-def merge_ranks(gb):
-
-    agg_tax = OrderedDict([(rank, []) for rank in ranks])
-    for key, group_df in gb:
-        tax_consistency = False
-        for rank in ranks:
-            if tax_consistency:
-                agg_tax[rank].append(group_df[rank].iloc[0])
-            else:
-                if group_df[rank].all():
-                    tax_consistency = True
-                    agg_tax[rank].append(group_df[rank].iloc[0])
-                else:
-                    agg_tax[rank] = ''
-    ranks_df = pd.DataFrame.from_dict(agg_tax)
-
-    return ranks_df
-
 def compare_bins(bin_table_fps):
 
     compar_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'])
@@ -642,6 +664,24 @@ def compare_bins(bin_table_fps):
     compar_df.to_csv(compar_df_fp, sep='\t', index=False)
 
     return
+
+def merge_ranks(gb):
+
+    agg_tax = OrderedDict([(rank, []) for rank in ranks])
+    for key, group_df in gb:
+        tax_consistency = False
+        for rank in ranks:
+            if tax_consistency:
+                agg_tax[rank].append(group_df[rank].iloc[0])
+            else:
+                if group_df[rank].all():
+                    tax_consistency = True
+                    agg_tax[rank].append(group_df[rank].iloc[0])
+                else:
+                    agg_tax[rank] = ''
+    ranks_df = pd.DataFrame.from_dict(agg_tax)
+
+    return ranks_df    
 
 if __name__ == '__main__':
     main()
