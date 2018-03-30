@@ -49,6 +49,15 @@ blast_table_hdrs = [
     'evalue', 
     'bitscore'
 ]
+ranks = [
+    'species', 
+    'genus', 
+    'family', 
+    'order', 
+    'class', 
+    'phylum', 
+    'superkingdom'
+]
 bin_table_hdrs = [
     'qfile', 
     'scan', 
@@ -67,7 +76,7 @@ bin_table_hdrs = [
     'protein', 
     'cog', 
     'descrip'
-]
+] + ranks
 
 def main():
 
@@ -423,7 +432,9 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
     postnovo_df.sort_values('scan', inplace=True)
     postnovo_df.set_index('scan', inplace=True)
     postnovo_df = postnovo_df.loc[blast_df['scan'].tolist()].reset_index()
-    postnovo_df = postnovo_df[['scan', 'predicted name', 'cog cat', 'eggnog hmm desc']]
+    postnovo_df = postnovo_df[
+        ['scan', 'predicted name', 'cog cat', 'eggnog hmm desc'] + ranks
+    ]
     postnovo_df.rename(
         columns={'predicted name': 'protein', 'cog cat': 'cog', 'eggnog hmm desc': 'descrip'}, 
         inplace=True
@@ -551,14 +562,31 @@ def systematize_annot(bin_table_fps):
 
     return
 
+def merge_ranks(gb):
+
+    agg_tax = OrderedDict([(rank, []) for rank in ranks])
+    for key, group_df in gb:
+        tax_consistency = False
+        for rank in ranks:
+            if tax_consistency:
+                agg_tax[rank].append(group_df[rank].iloc[0])
+            else:
+                if group_df[rank].all():
+                    tax_consistency = True
+                    agg_tax[rank].append(group_df[rank].iloc[0])
+                else:
+                    agg_tax[rank] = ''
+    ranks_df = pd.DataFrame.from_dict(agg_tax)
+
+    return ranks_df
+
 def compare_bins(bin_table_fps):
 
     compar_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'])
     for bin_table_fp in bin_table_fps:
-        print(bin_table_fp, flush=True)
         bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[
-            ['protein', 'descrip', 'cog', 'bitscore']
+            ['protein', 'descrip', 'cog', 'bitscore'] + ranks
         ]
         protein_gb = bin_df[pd.notnull(bin_df['protein'])].groupby('protein')
         protein_df = protein_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
@@ -566,33 +594,49 @@ def compare_bins(bin_table_fps):
         protein_df['descrip'] = protein_gb['descrip'].agg(lambda d: d.value_counts().index[0])
         protein_df['cog'] = protein_gb['cog'].agg(lambda c: c.value_counts().index[0])
         protein_df.reset_index(inplace=True, drop=True)
+        protein_df[ranks] = merge_ranks(protein_gb)
         del(protein_gb)
-        descrip_gb = bin_df[pd.isnull(bin_df['protein'])].groupby('descrip')
+        bin_df['descrip_lowercase'] = bin_df['descrip'].str.lower()
+        descrip_gb = bin_df[pd.isnull(bin_df['protein'])].groupby('descrip_lowercase')
         descrip_df = descrip_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
-        descrip_df['descrip'] = [descrip for descrip, _ in descrip_gb]
+        descrip_df['descrip'] = descrip_gb['descrip'].agg(lambda d: d.value_counts().index[0])
         descrip_df['cog'] = descrip_gb['cog'].agg(lambda c: c.value_counts().index[0])
         descrip_df.reset_index(inplace=True, drop=True)
+        descrip_df[ranks] = merge_ranks(descrip_gb)
         del(descrip_gb)
         del(bin_df)
-        bin_summary_df = pd.concat([protein_df, descrip_df])
+        bin_summary_df = pd.concat([protein_df, descrip_df], ignore_index=True)
         del(protein_df)
         del(descrip_df)
         bin_summary_df = bin_summary_df[
-            ['protein', 'descrip', 'cog', 'mean', 'min', 'max', 'count']
+            ['protein', 'descrip', 'cog', 'mean', 'min', 'max', 'count'] + ranks
         ]
         bin_summary_df['mean'] = bin_summary_df['mean'].round(1)
         bin_summary_df.rename(
-            columns={
-                'mean': bin_name + '_mean', 
-                'min': bin_name + '_min', 
-                'max': bin_name + '_max', 
-                'count': bin_name + '_count'
-            }, 
+            columns=dict(
+                (old_name, bin_name + '_' + old_name) for old_name 
+                in ['mean', 'min', 'max', 'count'] + ranks
+            ), 
             inplace=True
         )
-        print(bin_table_fp, flush=True)
         compar_df = compar_df.merge(bin_summary_df, how='outer', on=['protein', 'descrip', 'cog'])
         del(bin_summary_df)
+
+    ranks_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'] + ranks)
+    for bin_table_fp in bin_table_fps:
+        bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
+        bin_rank_cols = [bin_name + '_' + rank for rank in ranks]
+        bin_ranks_df = compar_df[['protein', 'descrip', 'cog'] + bin_rank_cols].copy()
+        bin_ranks_df.rename(
+            columns=dict(
+                (bin_rank_col, ranks[i]) for i, bin_rank_col in enumerate(bin_rank_cols)
+            ), 
+            inplace=True
+        )
+        ranks_df = pd.concat([ranks_df, bin_ranks_df], ignore_index=True)
+        compar_df.drop(bin_rank_cols, axis=1, inplace=True)
+    compar_df[ranks] = merge_ranks(ranks_df.groupby(['protein', 'descrip', 'cog']))[ranks]
+
     compar_df_fp = os.path.join(out_dir, 'bin_compar.tsv')
     compar_df.sort_values(['protein', 'descrip'], inplace=True)
     compar_df.to_csv(compar_df_fp, sep='\t', index=False)
