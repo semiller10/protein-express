@@ -110,6 +110,7 @@ def main():
             postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
             parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp)
 
+    systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
 
 def get_args():
@@ -358,7 +359,6 @@ def run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, num_threads):
         if i % split_size == 0 and file_num < num_threads:
             file_num += 1
             split_fasta_fp = os.path.join(tmp_dir, query_name + '.' + str(file_num) + '.faa')
-            print(split_fasta_fp, flush=True)
             split_fasta_fps.append(split_fasta_fp)
             handle.close()
             handle = open(split_fasta_fp, 'w')
@@ -449,22 +449,137 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp):
 
     return bin_table_fp
 
+def systematize_annot(bin_table_fps):
+    '''
+    Ensure that every protein name maps to the same eggNOG description and COG
+    '''
+
+    protein_descrip_counts = dict()
+    protein_cog_counts = dict()
+    descrip_cog_counts = dict()
+    for bin_table_fp in bin_table_fps:
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[['protein', 'descrip', 'cog']]
+        bin_df.fillna('')
+        proteins = bin_df['protein'].tolist()
+        descrips = bin_df['descrip'].tolist()
+        cogs = bin_df['cog'].tolist()
+        del(bin_df)
+
+        for i, protein in enumerate(proteins):
+            descrip = descrips[i]
+            cog = cogs[i]
+
+            if protein != '':
+                try:
+                    d = protein_descrip_counts[protein]
+                    try:
+                        d[descrip] += 1
+                    except KeyError:
+                        d[descrip] = 1
+                except KeyError:
+                    d = protein_descrip_counts[protein] = dict()
+                    d[descrip] = 1
+
+                try:
+                    d = protein_cog_counts[protein]
+                    try:
+                        d[cog] += 1
+                    except KeyError:
+                        d[cog] = 1
+                except KeyError:
+                    d = protein_cog_counts[protein] = dict()
+                    d[cog] = 1
+
+            try:
+                d = descrip_cog_counts[descrip]
+                try:
+                    d[cog] += 1
+                except KeyError:
+                    d[cog] = 1
+            except KeyError:
+                d = descrip_cog_counts[descrip] = dict()
+                d[cog] = 1
+
+    protein_descrip = dict()
+    protein_cog = dict()
+    descrip_cog = dict()
+    for protein, descrip_counts in protein_descrip_counts.items():
+        max_count = 0
+        best_descrip = ''
+        for descrip, count in descrip_counts.items():
+            if count > max_count:
+                best_descrip = descrip
+        protein_descrip[protein] = best_descrip
+    del(protein_descrip_counts)
+    for protein, cog_counts in protein_cog_counts.items():
+        max_count = 0
+        best_cog = ''
+        for cog, count in cog_counts.items():
+            if count > max_count:
+                best_cog = cog
+        protein_cog[protein] = best_cog
+    del(protein_cog_counts)
+    for descrip, cog_counts in descrip_cog_counts.items():
+        max_count = 0
+        best_cog = ''
+        for cog, count in cog_counts.items():
+            if count > max_count:
+                best_cog = cog
+        descrip_cog[descrip] = best_cog
+    del(descrip_cog_counts)
+
+    for bin_table_fp in bin_table_fps:
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
+        bin_df['protein'] = bin_df['protein'].fillna('')
+        bin_df['descrip'] = bin_df['descrip'].fillna('')
+        bin_df['cog'] = bin_df['cog'].fillna('')
+        proteins = bin_df['protein'].tolist()
+        old_descrips = bin_df['descrip'].tolist()
+        new_descrips = []
+        new_cogs = []
+        for i, protein in enumerate(proteins):
+            if protein == '':
+                descrip = old_descrips[i]
+                new_descrips.append(descrip)
+                new_cogs.append(descrip_cog[descrip])
+            else:
+                new_descrips.append(protein_descrip[protein])
+                new_cogs.append(protein_cog[protein])
+        bin_df['descrip'] = new_descrips
+        bin_df['cog'] = new_cogs
+        bin_df.to_csv(bin_table_fp, sep='\t', index=False)
+
+    return
+
 def compare_bins(bin_table_fps):
 
-    compar_df = pd.DataFrame(columns=['protein', 'descrip'])
+    compar_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'])
     for bin_table_fp in bin_table_fps:
+        print(bin_table_fp, flush=True)
         bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
-        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[['protein', 'descrip', 'bitscore']]
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[
+            ['protein', 'descrip', 'cog', 'bitscore']
+        ]
         protein_gb = bin_df[pd.notnull(bin_df['protein'])].groupby('protein')
         protein_df = protein_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
         protein_df['protein'] = [protein for protein, _ in protein_gb]
         protein_df['descrip'] = protein_gb['descrip'].agg(lambda d: d.value_counts().index[0])
+        protein_df['cog'] = protein_gb['cog'].agg(lambda c: c.value_counts().index[0])
         protein_df.reset_index(inplace=True, drop=True)
+        del(protein_gb)
         descrip_gb = bin_df[pd.isnull(bin_df['protein'])].groupby('descrip')
-        descrip_df = descrip_gb['bitscore'].agg(['mean', 'min', 'max', 'count']).reset_index()
+        descrip_df = descrip_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
         descrip_df['descrip'] = [descrip for descrip, _ in descrip_gb]
+        descrip_df['cog'] = descrip_gb['cog'].agg(lambda c: c.value_counts().index[0])
+        descrip_df.reset_index(inplace=True, drop=True)
+        del(descrip_gb)
+        del(bin_df)
         bin_summary_df = pd.concat([protein_df, descrip_df])
-        bin_summary_df = bin_summary_df[['protein', 'descrip', 'mean', 'min', 'max', 'count']]
+        del(protein_df)
+        del(descrip_df)
+        bin_summary_df = bin_summary_df[
+            ['protein', 'descrip', 'cog', 'mean', 'min', 'max', 'count']
+        ]
         bin_summary_df['mean'] = bin_summary_df['mean'].round(1)
         bin_summary_df.rename(
             columns={
@@ -475,8 +590,11 @@ def compare_bins(bin_table_fps):
             }, 
             inplace=True
         )
-        compar_df = compar_df.merge(bin_summary_df, how='outer', on=['protein', 'descrip'])
+        print(bin_table_fp, flush=True)
+        compar_df = compar_df.merge(bin_summary_df, how='outer', on=['protein', 'descrip', 'cog'])
+        del(bin_summary_df)
     compar_df_fp = os.path.join(out_dir, 'bin_compar.tsv')
+    compar_df.sort_values(['protein', 'descrip'], inplace=True)
     compar_df.to_csv(compar_df_fp, sep='\t', index=False)
 
     return
