@@ -29,6 +29,7 @@ from collections import OrderedDict
 from functools import partial
 from glob import glob
 import multiprocessing as mp
+import numpy as np
 import os
 import os.path
 import pandas as pd
@@ -110,22 +111,23 @@ def main():
         bin_name = os.path.basename(blast_db_fp)
         bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
         bin_table_fps.append(bin_table_fp)
-        for i, query_fasta_fp in enumerate(query_fasta_fps):
-            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
-            search_dir = os.path.join(out_dir, prot_name + '.bin_search')
-            blast_table_fp = os.path.join(
-                search_dir, prot_name + '.' + os.path.basename(blast_db_fp) + '.blastp_hits.out'
-            )
-            if os.path.exists(blast_table_fp):
-                print(blast_table_fp, 'already exists', flush=True)
-            else:
-                pass
-                # UNCOMMENT
-                # run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
-            postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
-            peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
-            parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp)
-        remove_redun_peps(bin_table_fps[-1])
+        # UNCOMMENT
+        # for i, query_fasta_fp in enumerate(query_fasta_fps):
+        #     prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
+        #     search_dir = os.path.join(out_dir, prot_name + '.bin_search')
+        #     blast_table_fp = os.path.join(
+        #         search_dir, prot_name + '.' + os.path.basename(blast_db_fp) + '.blastp_hits.out'
+        #     )
+        #     if os.path.exists(blast_table_fp):
+        #         print(blast_table_fp, 'already exists', flush=True)
+        #     else:
+        #         pass
+        #         # UNCOMMENT
+        #         # run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
+        #     postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
+        #     peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
+        #     parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp)
+        # remove_redun_peps(bin_table_fps[-1])
 
     systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
@@ -496,6 +498,7 @@ def remove_redun_peps(bin_table_fp):
     bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
     bin_df = bin_df.groupby('peptide', as_index=False).first()
     bin_df = bin_df[bin_table_hdrs]
+    bin_df.sort_values(['qfile', 'scan'], inplace=True)
     bin_df.to_csv(bin_table_fp, sep='\t', index=False)
 
     return
@@ -604,9 +607,13 @@ def systematize_annot(bin_table_fps):
 
 def compare_bins(bin_table_fps):
 
+    bin_names = [
+        os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
+        for bin_table_fp in bin_table_fps
+    ]
     compar_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'])
-    for bin_table_fp in bin_table_fps:
-        bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
+    for i, bin_table_fp in enumerate(bin_table_fps):
+        bin_name = bin_names[i]
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[
             ['protein', 'descrip', 'cog', 'bitscore'] + ranks
         ]
@@ -645,8 +652,7 @@ def compare_bins(bin_table_fps):
         del(bin_summary_df)
 
     ranks_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'] + ranks)
-    for bin_table_fp in bin_table_fps:
-        bin_name = os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
+    for bin_name in bin_names:
         bin_rank_cols = [bin_name + '_' + rank for rank in ranks]
         bin_ranks_df = compar_df[['protein', 'descrip', 'cog'] + bin_rank_cols].copy()
         bin_ranks_df.rename(
@@ -657,10 +663,32 @@ def compare_bins(bin_table_fps):
         )
         ranks_df = pd.concat([ranks_df, bin_ranks_df], ignore_index=True)
         compar_df.drop(bin_rank_cols, axis=1, inplace=True)
-    compar_df[ranks] = merge_ranks(ranks_df.groupby(['protein', 'descrip', 'cog']))[ranks]
+    compar_df['protein'] = compar_df['protein'].fillna('')
+    compar_df.sort_values(['protein', 'descrip', 'cog'], inplace=True)
+    compar_df.reset_index(drop=True, inplace=True)
+    ranks_df['protein'] = ranks_df['protein'].fillna('')
+    compar_df[ranks] = merge_ranks(ranks_df.groupby(['protein', 'descrip', 'cog'], as_index=False))
 
+    compar_df['total_count'] = 0
+    for bin_name in bin_names:
+        bin_count_hdr = bin_name + '_count'
+        compar_df[bin_count_hdr].fillna(0, inplace=True)
+        compar_df['total_count'] += compar_df[bin_count_hdr]
+        compar_df[bin_count_hdr].replace(0, np.nan, inplace=True)
+
+    min_bitscores = compar_df[[bin_name + '_mean' for bin_name in bin_names]].min(axis='columns')
+    for bin_name in bin_names:
+        bin_mean_index = compar_df.columns.get_loc(bin_name + '_mean')
+        propor_col_name = bin_name + '_propor'
+        compar_df.insert(
+            loc=bin_mean_index + 1, 
+            column=propor_col_name, 
+            value=compar_df[bin_name + '_mean'] / min_bitscores
+        )
+        compar_df[propor_col_name] = compar_df[propor_col_name].round(2)
+
+    compar_df.sort_values(['cog', 'total_count'], ascending=[True, False], inplace=True)
     compar_df_fp = os.path.join(out_dir, 'bin_compar.tsv')
-    compar_df.sort_values(['protein', 'descrip'], inplace=True)
     compar_df.to_csv(compar_df_fp, sep='\t', index=False)
 
     return
@@ -668,20 +696,25 @@ def compare_bins(bin_table_fps):
 def merge_ranks(gb):
 
     agg_tax = OrderedDict([(rank, []) for rank in ranks])
-    for key, group_df in gb:
+    for _, group_df in gb:
         tax_consistency = False
         for rank in ranks:
             if tax_consistency:
                 agg_tax[rank].append(group_df[rank].iloc[0])
             else:
-                if group_df[rank].all():
-                    tax_consistency = True
-                    agg_tax[rank].append(group_df[rank].iloc[0])
+                rank_series = group_df[rank]
+                if len(rank_series.unique()) == 1:
+                    tax = rank_series.iloc[0]
+                    if pd.isnull(tax):
+                        agg_tax[rank].append('')
+                    else:
+                        tax_consistency = True
+                        agg_tax[rank].append(tax)
                 else:
-                    agg_tax[rank] = ''
+                    agg_tax[rank].append('')
     ranks_df = pd.DataFrame.from_dict(agg_tax)
 
-    return ranks_df    
+    return ranks_df
 
 if __name__ == '__main__':
     main()
