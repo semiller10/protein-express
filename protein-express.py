@@ -83,18 +83,34 @@ bin_table_hdrs = [
     'cog', 
     'descrip'
 ] + ranks
+compar_table_merge_hdrs = ['protein', 'descrip', 'cog']
 
 def main():
 
     args = get_args()
-    global out_dir
+    global prot_dirs, bin_dir, out_dir, num_threads
+    prot_dirs = args.prot_dirs
+    bin_dir = args.bin_dir
     out_dir = args.out
+    num_threads = args.threads
 
-    run_prodigal(args.bin_dir, args.threads)
+    prot_state = OrderedDict()
+    if args.state != None:
+        state_df = pd.read_csv(args.state, sep='\t', header=0)
+        for _, row in state_df.iterrows():
+            prot = row.iloc[0]
+            state = row.iloc[1]
+            prot_state[prot] = state
+        global all_states
+        all_states = list(set(state_df.iloc[:, 1].tolist()))
+
+    run_prodigal()
 
     blast_db_fps = []
-    for bin_basename in os.listdir(args.bin_dir):
-        blast_db_fps.append(make_blast_db(os.path.join(args.bin_dir, bin_basename)))
+    for bin_basename in os.listdir(bin_dir):
+        blast_db_fps.append(make_blast_db(os.path.join(bin_dir, bin_basename)))
+    global bin_names
+    bin_names = [os.path.basename(blast_db_fp) for blast_db_fp in blast_db_fps]
 
     query_fasta_fps = []
     for prot_dir in args.prot_dirs:
@@ -106,31 +122,12 @@ def main():
         else:
             make_query_fasta(prot_dir)
 
-    bin_table_fps = []
-    for blast_db_fp in blast_db_fps:
-        bin_name = os.path.basename(blast_db_fp)
-        bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
-        bin_table_fps.append(bin_table_fp)
-        # UNCOMMENT
-        # for i, query_fasta_fp in enumerate(query_fasta_fps):
-        #     prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
-        #     search_dir = os.path.join(out_dir, prot_name + '.bin_search')
-        #     blast_table_fp = os.path.join(
-        #         search_dir, prot_name + '.' + os.path.basename(blast_db_fp) + '.blastp_hits.out'
-        #     )
-        #     if os.path.exists(blast_table_fp):
-        #         print(blast_table_fp, 'already exists', flush=True)
-        #     else:
-        #         pass
-        #         # UNCOMMENT
-        #         # run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, args.threads)
-        #     postnovo_table_fp = os.path.join(args.prot_dirs[i], 'reported_df.tsv')
-        #     peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
-        #     parse_blast_table(prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp)
-        # remove_redun_peps(bin_table_fps[-1])
+    if prot_state:
+        state_pipeline(prot_state, blast_db_fps, query_fasta_fps)
+    else:
+        stateless_pipeline(blast_db_fps, query_fasta_fps)
 
-    systematize_annot(bin_table_fps)
-    compare_bins(bin_table_fps)
+    return
 
 def get_args():
     '''
@@ -171,22 +168,19 @@ def get_args():
 
     return args
 
-def run_prodigal(bin_dir, threads):
+def run_prodigal():
 
     bin_basenames = os.listdir(bin_dir)
     bin_fps = [os.path.join(bin_dir, bin_basename) for bin_basename in bin_basenames]
 
-    partial_prodigal_worker = partial(
-        prodigal_worker, out_dir=out_dir
-    )
-    mp_pool = mp.Pool(threads)
-    mp_pool.map(partial_prodigal_worker, bin_fps)
+    mp_pool = mp.Pool(num_threads)
+    mp_pool.map(prodigal_worker, bin_fps)
     mp_pool.close()
     mp_pool.join()
 
     return
 
-def prodigal_worker(bin_fp, out_dir):
+def prodigal_worker(bin_fp):
 
     bin_dir = os.path.dirname(bin_fp)
     bin_name = os.path.splitext(os.path.basename(bin_fp))[0]
@@ -369,7 +363,83 @@ def make_query_fasta(prot_dir):
             
     return
 
-def run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp, num_threads):
+def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
+
+    state_bin_table_fp = OrderedDict([(state, []) for state in all_states])
+    bin_table_fps = []
+    for i, bin_name in enumerate(bin_names):
+        blast_db_fp = blast_db_fps[i]
+        bin_table_fps_for_bin = []
+        for state in all_states:
+            bin_table_fp = os.path.join(out_dir, bin_name + '.' + state + '.blast_out.txt')
+            state_bin_table_fp[state].append(bin_table_fp)
+            bin_table_fps_for_bin.append(bin_table_fp)
+        bin_table_fps += bin_table_fps_for_bin
+        for i, query_fasta_fp in enumerate(query_fasta_fps):
+            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
+            state = prot_state[prot_name]
+            search_dir = os.path.join(out_dir, prot_name + '.bin_search')
+            blast_table_fp = os.path.join(
+                search_dir, prot_name + '.' + bin_name + '.blastp_hits.out'
+            )
+            if os.path.exists(blast_table_fp):
+                print(blast_table_fp, 'already exists', flush=True)
+            else:
+                run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
+            postnovo_table_fp = os.path.join(prot_dirs[i], 'reported_df.tsv')
+            peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
+            # UNCOMMENT
+            # parse_blast_table(
+            #     prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp, bin_table_fp
+            # )
+        for bin_table_fp in bin_table_fps_for_bin:
+            remove_redun_peps(bin_table_fp)
+
+    # UNCOMMENT
+    # systematize_annot(bin_table_fps)
+    state_compar_table_fp = OrderedDict().fromkeys(state_bin_table_fp)
+    # UNCOMMENT
+    # for state, bin_table_fps_for_state in state_bin_table_fp.items():
+    #     compar_table_basename = 'compar_table.' + state + '.tsv'
+    #     state_compar_table_fp[state] = compare_bins(
+    #         bin_table_fps_for_state, compar_table_basename
+    #     )
+    # REMOVE
+    state_compar_table_fp['tussock'] = os.path.join(out_dir, 'compar_table.tussock.tsv')
+    state_compar_table_fp['shrub'] = os.path.join(out_dir, 'compar_table.shrub.tsv')
+    compare_states(state_compar_table_fp)
+
+    return
+
+def stateless_pipeline(blast_db_fps, query_fasta_fps):
+
+    bin_table_fps = []
+    for i, bin_name in enumerate(bin_names):
+        blast_db_fp = blast_db_fps[i]
+        bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
+        bin_table_fps.append(bin_table_fp)
+        for i, query_fasta_fp in enumerate(query_fasta_fps):
+            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
+            search_dir = os.path.join(out_dir, prot_name + '.bin_search')
+            blast_table_fp = os.path.join(
+                search_dir, prot_name + '.' + bin_name + '.blastp_hits.out'
+            )
+            if os.path.exists(blast_table_fp):
+                print(blast_table_fp, 'already exists', flush=True)
+            else:run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
+            postnovo_table_fp = os.path.join(prot_dirs[i], 'reported_df.tsv')
+            peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
+            parse_blast_table(
+                prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp, bin_table_fp
+            )
+        remove_redun_peps(bin_table_fps[-1])
+
+    systematize_annot(bin_table_fps)
+    compare_bins(bin_table_fps)
+
+    return
+
+def run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp):
 
     print(
         'Aligning', os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', ''), 
@@ -436,7 +506,7 @@ def blastp_worker(query_fasta_fp, blast_db_fp):
 
     return
 
-def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp):
+def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp, bin_table_fp):
     '''
     Add BLAST table to merged table for all searches against bin
     '''
@@ -476,8 +546,6 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
 
     blast_df['scan'] = blast_df['scan'].apply(str)
 
-    bin_name = os.path.basename(blast_db_fp)
-    bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
     try:
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
     except FileNotFoundError:
@@ -512,7 +580,7 @@ def systematize_annot(bin_table_fps):
     protein_cog_counts = dict()
     descrip_cog_counts = dict()
     for bin_table_fp in bin_table_fps:
-        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[['protein', 'descrip', 'cog']]
+        bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[compar_table_merge_hdrs]
         bin_df.fillna('')
         proteins = bin_df['protein'].tolist()
         descrips = bin_df['descrip'].tolist()
@@ -605,13 +673,9 @@ def systematize_annot(bin_table_fps):
 
     return
 
-def compare_bins(bin_table_fps):
+def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
 
-    bin_names = [
-        os.path.basename(bin_table_fp).replace('.blast_out.txt', '')
-        for bin_table_fp in bin_table_fps
-    ]
-    compar_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'])
+    compar_df = pd.DataFrame(columns=compar_table_merge_hdrs)
     for i, bin_table_fp in enumerate(bin_table_fps):
         bin_name = bin_names[i]
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[
@@ -648,13 +712,13 @@ def compare_bins(bin_table_fps):
             ), 
             inplace=True
         )
-        compar_df = compar_df.merge(bin_summary_df, how='outer', on=['protein', 'descrip', 'cog'])
+        compar_df = compar_df.merge(bin_summary_df, how='outer', on=compar_table_merge_hdrs)
         del(bin_summary_df)
 
-    ranks_df = pd.DataFrame(columns=['protein', 'descrip', 'cog'] + ranks)
+    ranks_df = pd.DataFrame(columns=compar_table_merge_hdrs + ranks)
     for bin_name in bin_names:
         bin_rank_cols = [bin_name + '_' + rank for rank in ranks]
-        bin_ranks_df = compar_df[['protein', 'descrip', 'cog'] + bin_rank_cols].copy()
+        bin_ranks_df = compar_df[compar_table_merge_hdrs + bin_rank_cols].copy()
         bin_ranks_df.rename(
             columns=dict(
                 (bin_rank_col, ranks[i]) for i, bin_rank_col in enumerate(bin_rank_cols)
@@ -664,10 +728,10 @@ def compare_bins(bin_table_fps):
         ranks_df = pd.concat([ranks_df, bin_ranks_df], ignore_index=True)
         compar_df.drop(bin_rank_cols, axis=1, inplace=True)
     compar_df['protein'] = compar_df['protein'].fillna('')
-    compar_df.sort_values(['protein', 'descrip', 'cog'], inplace=True)
+    compar_df.sort_values(compar_table_merge_hdrs, inplace=True)
     compar_df.reset_index(drop=True, inplace=True)
     ranks_df['protein'] = ranks_df['protein'].fillna('')
-    compar_df[ranks] = merge_ranks(ranks_df.groupby(['protein', 'descrip', 'cog'], as_index=False))
+    compar_df[ranks] = merge_ranks(ranks_df.groupby(compar_table_merge_hdrs, as_index=False))
 
     compar_df['total_count'] = 0
     for bin_name in bin_names:
@@ -676,7 +740,7 @@ def compare_bins(bin_table_fps):
         compar_df['total_count'] += compar_df[bin_count_hdr]
         compar_df[bin_count_hdr].replace(0, np.nan, inplace=True)
 
-    min_bitscores = compar_df[[bin_name + '_mean' for bin_name in bin_names]].min(axis='columns')
+    min_bitscores = compar_df[[bin_name + '_mean' for bin_name in bin_names]].min(1)
     for bin_name in bin_names:
         bin_mean_index = compar_df.columns.get_loc(bin_name + '_mean')
         propor_col_name = bin_name + '_propor'
@@ -688,10 +752,10 @@ def compare_bins(bin_table_fps):
         compar_df[propor_col_name] = compar_df[propor_col_name].round(2)
 
     compar_df.sort_values(['cog', 'total_count'], ascending=[True, False], inplace=True)
-    compar_df_fp = os.path.join(out_dir, 'bin_compar.tsv')
-    compar_df.to_csv(compar_df_fp, sep='\t', index=False)
+    compar_table_fp = os.path.join(out_dir, compar_table_basename)
+    compar_df.to_csv(compar_table_fp, sep='\t', index=False)
 
-    return
+    return compar_table_fp
 
 def merge_ranks(gb):
 
@@ -715,6 +779,67 @@ def merge_ranks(gb):
     ranks_df = pd.DataFrame.from_dict(agg_tax)
 
     return ranks_df
+
+def compare_states(state_compar_table_fp):
+
+    all_state_df = pd.read_csv(list(state_compar_table_fp.items())[0][1], sep='\t', header=0)
+    prev_state_suff = '_' + list(state_compar_table_fp.items())[0][0]
+    prev_hdrs = [hdr + prev_state_suff for hdr in all_state_df.columns.tolist()]
+    for state, compar_table_fp in list(state_compar_table_fp.items())[1:]:
+        compar_df = pd.read_csv(compar_table_fp, sep='\t', header=0)
+        state_suff = '_' + state
+        all_state_df = all_state_df.merge(
+            compar_df, 
+            how='outer', 
+            on=compar_table_merge_hdrs, 
+            suffixes=(prev_state_suff, state_suff)
+        )
+
+        ordered_hdrs = []
+        compar_table_hdrs = compar_df.columns.tolist()
+        new_hdrs = [hdr + state_suff for hdr in compar_table_hdrs]
+        i = -1
+        compar_table_hdr = compar_table_hdrs[i]
+        new_hdr = new_hdrs[i]
+        for prev_hdr in prev_hdrs[::-1]:
+            if compar_table_hdr in prev_hdr:
+                if compar_table_hdr in compar_table_merge_hdrs:
+                    ordered_hdrs.append(compar_table_hdr)
+                    i -= 1
+                    try:
+                        compar_table_hdr = compar_table_hdrs[i]
+                        new_hdr = new_hdrs[i]
+                    except IndexError:
+                        break
+                else:
+                    ordered_hdrs.append(new_hdr)
+                    ordered_hdrs.append(prev_hdr)
+                    i -= 1
+                    compar_table_hdr = compar_table_hdrs[i]
+                    new_hdr = new_hdrs[i]
+            else:
+                ordered_hdrs.append(prev_hdr)
+        ordered_hdrs = ordered_hdrs[::-1]
+        all_state_df = all_state_df[ordered_hdrs]
+
+        prev_state_suff = state_suff
+        prev_hdrs = all_state_df.columns.tolist()
+
+    for state in all_states:
+        all_state_df[state + '_max_mean'] = all_state_df[
+            [bin + '_mean_' + state for bin in bin_names]
+        ].max(1)
+
+    total_count_cols = all_state_df[
+        ['total_count_' + state for state in all_states]
+    ].copy().fillna(0)
+    all_state_df['total_count_diff'] = total_count_cols.max(1) - total_count_cols.min(1)
+
+    all_state_df.sort_values(['cog', 'total_count_diff'], ascending=[True, False], inplace=True)
+    all_state_table_fp = os.path.join(out_dir, 'state_compar.tsv')
+    all_state_df.to_csv(all_state_table_fp, sep='\t', index=False)
+
+    return
 
 if __name__ == '__main__':
     main()
