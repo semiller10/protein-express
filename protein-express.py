@@ -752,17 +752,6 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
         compar_df['total_count'] += compar_df[bin_count_hdr]
         compar_df[bin_count_hdr].replace(0, np.nan, inplace=True)
 
-    min_bitscores = compar_df[[bin_name + '_mean' for bin_name in bin_names]].min(1)
-    for bin_name in bin_names:
-        bin_mean_index = compar_df.columns.get_loc(bin_name + '_mean')
-        propor_col_name = bin_name + '_propor'
-        compar_df.insert(
-            loc=bin_mean_index + 1, 
-            column=propor_col_name, 
-            value=compar_df[bin_name + '_mean'] / min_bitscores
-        )
-        compar_df[propor_col_name] = compar_df[propor_col_name].round(2)
-
     compar_df.sort_values(['cog', 'total_count'], ascending=[True, False], inplace=True)
     compar_table_fp = os.path.join(out_dir, compar_table_basename)
     compar_df.to_csv(compar_table_fp, sep='\t', index=False)
