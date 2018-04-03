@@ -1,29 +1,5 @@
 #!/usr/bin/env python3
 
-# Run prodigal on population bin fasta file
-# Make blast database from the amino acid fasta output
-
-# Loop through each proteomic dataset
-# Loop through each reported peptide (row)
-# Loop through each scan in the list of scans that matched the peptide
-# Loop through each metagenomic/transcriptomic dataset (best_predict_from and also_contains_predicts_from)
-# Search the dataset's filtered database search results for the scan
-# Loop through each fasta title
-# Recover the ORF from the filtered fasta file
-# Add headers/ORFs to a new fasta file
-# Headers are in the format: >ScanX.SeqNumY, e.g., >32454.2
-# Perform blastp search of the new fasta file against population bin database
-
-# Loop through the blast results
-# If the length of the alignment is >9 amino acids, 
-# and the e value is <0.01,
-# retrieve the scan (query ID) and percent identity
-# If at least one peptide matches the population bin, proceed
-# Make a file to record results for reported peptides, 
-# unless the file exists
-# Add a column for the population bin
-# Merge the blast results into the table by scan
-
 import argparse
 from collections import OrderedDict
 from functools import partial
@@ -50,10 +26,10 @@ blast_table_hdrs = [
     'send', 
     'evalue', 
     'bitscore'
-]
+    ]
 trans_table = dict.fromkeys(
     map(ord, ''.join(['.', '|', '^', '+', '-'] + [str(i) for i in range(10)])), None
-)
+    )
 ranks = [
     'species', 
     'genus', 
@@ -62,7 +38,7 @@ ranks = [
     'class', 
     'phylum', 
     'superkingdom'
-]
+    ]
 bin_table_hdrs = [
     'qfile', 
     'scan', 
@@ -82,7 +58,7 @@ bin_table_hdrs = [
     'protein', 
     'cog', 
     'descrip'
-] + ranks
+    ] + ranks
 compar_table_merge_hdrs = ['protein', 'descrip', 'cog']
 
 def main():
@@ -140,29 +116,34 @@ def get_args():
         '--prot_dirs', 
         nargs='+', 
         help='List of directories for each proteomic dataset'
-    )
+        )
     parser.add_argument(
         '-b', 
         '--bin_dir', 
         help='Directory exclusively containing bin fastas'
-    )
-    parser.add_argument(
-        '-s', 
-        '--state', 
-        help='Table relating each proteome name to a state'
-    )
+        )
     parser.add_argument(
         '-o', 
         '--out', 
         help='Output directory'
-    )
+        )
+    parser.add_argument(
+        '-s', 
+        '--state', 
+        help='Table relating each proteome name to a state'
+        )
+    parser.add_argument(
+        '-g', 
+        '--group', 
+        help='Table relating protein names or descriptions to groups'
+        )
     parser.add_argument(
         '-t', 
         '--threads', 
         type=int, 
         default=1, 
         help='Number of threads'
-    )
+        )
 
     args = parser.parse_args()
 
