@@ -33,7 +33,7 @@ When specified, additional tables for each state will be produced with the name
 compar_table.\<state\>.tsv.
 
 | Proteome  | Environment |
-|:---------:|:-----------:|
+| --------- | ----------- |
 | proteome1 | org_soil    |
 | proteome2 | min_soil    |
 
@@ -45,7 +45,7 @@ The former contains bitscore\*count scores for each protein/description feature 
 The latter contains summed bitscore\*count scores normalized to the maximum in each bin.<br />
 
 | Protein   | Description                             | Group           |
-|:---------:|:---------------------------------------:|:---------------:|
+| --------- | --------------------------------------- | --------------- |
 | ADH       |                                         | alc_dehydrog    |
 |           | Alcohol dehydrogenase GroES-like domain | alc_dehydrog    |
 | CODH      |                                         | carboxidotrophy |
