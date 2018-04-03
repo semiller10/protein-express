@@ -38,11 +38,11 @@ compar_table.\<state\>.tsv.
 | proteome2 | min_soil    |
 
 - -g, --group <br />
-Table (tsv with header) relating protein names and eggNOG description strings to groups<br />
+Table (tsv with header) relating protein names 
+and eggNOG description strings (if a protein name isn't assigned) to groups<br />
 When specified, two additional tables for each state will be produced with the names 
 protein_score.\<state\>.tsv and group_score.\<state\>.tsv.<br />
-The former contains bitscore\*count scores 
-normalized to the maximum of each protein/description feature in each bin.<br />
+The former contains bitscore\*count scores of each protein/description feature in each bin.<br />
 The latter contains summed bitscore\*count scores 
 normalized to the maximum group sum in each bin.<br />
 

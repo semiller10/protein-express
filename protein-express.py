@@ -119,15 +119,41 @@ def assign_groups(group_fp):
     group_assign_df.fillna('', inplace=True)
     protein_group = OrderedDict([
         (p, g) for p, g 
-        in zip(group_df['group'].tolist(), group_df['protein'])
+        in zip(group_df['protein'].tolist(), group_df['group'])
         if p != ''
         ])
     descrip_group = OrderedDict([
         (d, g) for d, g 
-        in zip(group_df['group'].tolist(), group_df['descrip'])
+        in zip(group_df['descrip'].tolist(), group_df['group'])
         if d != ''
         ])
-    del(group_df)
+    
+    state_df = pd.DataFrame(columns=['group', 'protein', 'descrip'])
+    for state in all_states:
+        fp = os.path.join(out_dir, 'compar_table.' + state + '.tsv')
+        compar_df = pd.read_csv(fp, sep='\t', header=0)
+        compar_df = compar_df[
+            (compar_df['protein'] in protein_group)
+            | (compar_df['protein'] == '' and compar_df['descrip'] in descrip_group)
+            ]
+        state_df['protein'] = compar_df['protein'].fillna('')
+        state_df['descrip'] = compar_df['descrip']
+        groups = []
+        for p, d in zip(compar_df['protein'].tolist(), compar_df['descrip'].tolist()):
+            if p == '':
+                groups.append(descrip_group[d])
+            else:
+                groups.append(protein_group[p])
+        state_df['group'] = groups
+
+        for bin in bin_names:
+            bin_scores = []
+            bin_df = compar_df[[bin + '_mean', bin + '_count']]
+            bin_df.fillna(0)
+            state_df[bin] = bin_df[bin + '_mean'] * bin_df[bin + '_count']
+
+        state_df.sort_values(['group', 'protein'], inplace=True)
+        state_df.to_csv(os.path.join(out_dir, 'protein_score.' + state + '.tsv'), index=False)
 
     return
 
