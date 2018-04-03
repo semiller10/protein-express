@@ -390,13 +390,18 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
             peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
             # UNCOMMENT
             # parse_blast_table(
-            #     prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp, bin_table_fp
+            #     prot_name, 
+            #     blast_table_fp, 
+            #     blast_db_fp, 
+            #     postnovo_table_fp, 
+            #     peps_fp, 
+            #     os.path.join(out_dir, bin_name + '.' + state + '.blast_out.txt')
             # )
         for bin_table_fp in bin_table_fps_for_bin:
             remove_redun_peps(bin_table_fp)
 
     # UNCOMMENT
-    # systematize_annot(bin_table_fps)
+    #systematize_annot(bin_table_fps)
     state_compar_table_fp = OrderedDict().fromkeys(state_bin_table_fp)
     # UNCOMMENT
     # for state, bin_table_fps_for_state in state_bin_table_fp.items():
@@ -404,9 +409,9 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
     #     state_compar_table_fp[state] = compare_bins(
     #         bin_table_fps_for_state, compar_table_basename
     #     )
-    # REMOVE
-    state_compar_table_fp['tussock'] = os.path.join(out_dir, 'compar_table.tussock.tsv')
-    state_compar_table_fp['shrub'] = os.path.join(out_dir, 'compar_table.shrub.tsv')
+    state_compar_table_fp['tussock'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.tussock.tsv'
+    state_compar_table_fp['intertussock'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.intertussock.tsv'
+    state_compar_table_fp['shrub'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.shrub.tsv'
     compare_states(state_compar_table_fp)
 
     return
@@ -573,7 +578,7 @@ def remove_redun_peps(bin_table_fp):
 
 def systematize_annot(bin_table_fps):
     '''
-    Ensure that every protein name maps to the same eggNOG description and COG
+    Ensure that protein names map to consistent eggNOG descriptions and COGs
     '''
 
     protein_descrip_counts = dict()
@@ -782,52 +787,42 @@ def merge_ranks(gb):
 
 def compare_states(state_compar_table_fp):
 
-    all_state_df = pd.read_csv(list(state_compar_table_fp.items())[0][1], sep='\t', header=0)
-    prev_state_suff = '_' + list(state_compar_table_fp.items())[0][0]
-    prev_hdrs = [hdr + prev_state_suff for hdr in all_state_df.columns.tolist()]
-    for state, compar_table_fp in list(state_compar_table_fp.items())[1:]:
-        compar_df = pd.read_csv(compar_table_fp, sep='\t', header=0)
-        state_suff = '_' + state
+    state_compar_table = OrderedDict([
+        (state, pd.read_csv(compar_table_fp, sep='\t', header=0)) 
+        for state, compar_table_fp in state_compar_table_fp.items()
+    ])
+
+    num_cols = len(list(state_compar_table.values())[0].columns)
+    all_state_df = pd.DataFrame(columns=compar_table_merge_hdrs)
+    i = 0
+    while True:
+        prev_state_suff = '_' + list(state_compar_table.keys())[0]
+        col_df = list(state_compar_table.values())[0]
+        col = col_df.columns[i + len(compar_table_merge_hdrs)]
+        print(col)
+        col_df = col_df[compar_table_merge_hdrs + [col]]
+        col_df.rename(columns={col: col + prev_state_suff}, inplace=True)
+        for state, compar_df in list(state_compar_table.items())[1:]:
+            state_suff = '_' + state
+            next_col_df = compar_df[compar_table_merge_hdrs + [col]]
+            next_col_df.rename(columns={col: col + state_suff}, inplace=True)
+            col_df = col_df.merge(
+                next_col_df, 
+                how='outer', 
+                on=compar_table_merge_hdrs, 
+                suffixes=(prev_state_suff, state_suff)
+            )
+            prev_state_suff = state_suff
         all_state_df = all_state_df.merge(
-            compar_df, 
-            how='outer', 
-            on=compar_table_merge_hdrs, 
-            suffixes=(prev_state_suff, state_suff)
+            col_df, how='outer', on=compar_table_merge_hdrs
         )
-
-        ordered_hdrs = []
-        compar_table_hdrs = compar_df.columns.tolist()
-        new_hdrs = [hdr + state_suff for hdr in compar_table_hdrs]
-        i = -1
-        compar_table_hdr = compar_table_hdrs[i]
-        new_hdr = new_hdrs[i]
-        for prev_hdr in prev_hdrs[::-1]:
-            if compar_table_hdr in prev_hdr:
-                if compar_table_hdr in compar_table_merge_hdrs:
-                    ordered_hdrs.append(compar_table_hdr)
-                    i -= 1
-                    try:
-                        compar_table_hdr = compar_table_hdrs[i]
-                        new_hdr = new_hdrs[i]
-                    except IndexError:
-                        break
-                else:
-                    ordered_hdrs.append(new_hdr)
-                    ordered_hdrs.append(prev_hdr)
-                    i -= 1
-                    compar_table_hdr = compar_table_hdrs[i]
-                    new_hdr = new_hdrs[i]
-            else:
-                ordered_hdrs.append(prev_hdr)
-        ordered_hdrs = ordered_hdrs[::-1]
-        all_state_df = all_state_df[ordered_hdrs]
-
-        prev_state_suff = state_suff
-        prev_hdrs = all_state_df.columns.tolist()
-
+        i += 1
+        if i == num_cols - len(compar_table_merge_hdrs):
+            break
+            
     for state in all_states:
         all_state_df[state + '_max_mean'] = all_state_df[
-            [bin + '_mean_' + state for bin in bin_names]
+            [bin_name + '_mean_' + state for bin_name in bin_names]
         ].max(1)
 
     total_count_cols = all_state_df[
