@@ -31,19 +31,24 @@ Output directory, to which the file compar_table.tsv is written.
 Table (tsv with header) relating each proteome name to a labeled state<br />
 When specified, additional tables for each state will be produced with the name 
 compar_table.\<state\>.tsv.
-- -g, --group <br />
-Table (tsv with header) relating protein names (e.g., ADH) 
-and eggNOG description strings (e.g., Alcohol dehydrogenase GroES-like domain) 
-to groups (e.g., alc_dehydrog)<br />
-When specified, two additional tables for each state will be produced with the names 
-protein_score.\<state\>.tsv and group_score.\<state\>.tsv.<br />
-The former contains bitscore*count scores for each protein/description feature in each bin.<br />
-The latter contains summed bitscore*count scores normalized to the maximum in each bin.<br />
 
 | Proteome  | Environment |
 |:---------:|:-----------:|
 | proteome1 | org_soil    |
 | proteome2 | min_soil    |
+
+- -g, --group <br />
+Table (tsv with header) relating protein names and eggNOG description strings to groups<br />
+When specified, two additional tables for each state will be produced with the names 
+protein_score.\<state\>.tsv and group_score.\<state\>.tsv.<br />
+The former contains bitscore\*count scores for each protein/description feature in each bin.<br />
+The latter contains summed bitscore\*count scores normalized to the maximum in each bin.<br />
+
+| Protein   | Description                             | Group           |
+|:---------:|:---------------------------------------:|:---------------:|
+| ADH       |                                         | alc_dehydrog    |
+|           | Alcohol dehydrogenase GroES-like domain | alc_dehydrog    |
+| CODH      |                                         | carboxidotrophy |
 
 - -t, --threads<br />
 Number of threads, default = 1
