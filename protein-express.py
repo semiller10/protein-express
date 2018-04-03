@@ -102,6 +102,32 @@ def main():
         state_pipeline(prot_state, blast_db_fps, query_fasta_fps)
     else:
         stateless_pipeline(blast_db_fps, query_fasta_fps)
+        
+    if args.groups != None:
+        assign_groups(args.groups)
+        
+    return
+
+def assign_groups(group_fp):
+    '''
+    Assign proteins and descriptions to groups
+    '''
+
+    group_df = pd.read_csv(
+        group_fp, sep='\t', header=0, names=['group', 'protein', 'descrip']
+        )
+    group_assign_df.fillna('', inplace=True)
+    protein_group = OrderedDict([
+        (p, g) for p, g 
+        in zip(group_df['group'].tolist(), group_df['protein'])
+        if p != ''
+        ])
+    descrip_group = OrderedDict([
+        (d, g) for d, g 
+        in zip(group_df['group'].tolist(), group_df['descrip'])
+        if d != ''
+        ])
+    del(group_df)
 
     return
 
@@ -109,7 +135,7 @@ def get_args():
     '''
     Get command line arguments
     '''
-
+    
     parser = argparse.ArgumentParser()
     parser.add_argument(
         '-p', 

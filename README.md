@@ -44,11 +44,11 @@ protein_score.\<state\>.tsv and group_score.\<state\>.tsv.<br />
 The former contains bitscore\*count scores for each protein/description feature in each bin.<br />
 The latter contains summed bitscore\*count scores normalized to the maximum in each bin.<br />
 
-| Protein   | Description                             | Group           |
-| --------- | --------------------------------------- | --------------- |
-| ADH       |                                         | alc_dehydrog    |
-|           | Alcohol dehydrogenase GroES-like domain | alc_dehydrog    |
-| CODH      |                                         | carboxidotrophy |
+| Group           | Protein   | Description                             |
+| --------------- | --------- | --------------------------------------- |
+| alc_dehydrog    | ADH       |                                         |
+| alc_dehydrog    |           | Alcohol dehydrogenase GroES-like domain |
+| carboxidotrophy | CODH      |                                         |
 
 - -t, --threads<br />
 Number of threads, default = 1
