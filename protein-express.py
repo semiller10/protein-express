@@ -10,6 +10,7 @@ import os
 import os.path
 import pandas as pd
 import pickle as pkl
+import seaborn as sb
 import subprocess
 import sys
 
@@ -104,64 +105,8 @@ def main():
         stateless_pipeline(blast_db_fps, query_fasta_fps)
         
     if args.group != None:
-        assign_groups(args.group)
+        score_df = assign_groups(args.group)
         
-    return
-
-def assign_groups(assign_fp):
-    '''
-    Assign proteins and descriptions to groups
-    '''
-
-    assign_df = pd.read_csv(
-        assign_fp, sep='\t', header=0, names=['group', 'protein', 'descrip']
-        )
-    assign_df.fillna('', inplace=True)
-    protein_group = OrderedDict([
-        (p, g) for p, g 
-        in zip(assign_df['protein'].tolist(), assign_df['group'])
-        if p != ''
-        ])
-    descrip_group = OrderedDict([
-        (d, g) for d, g 
-        in zip(assign_df['descrip'].tolist(), assign_df['group'])
-        if d != ''
-        ])
-    
-    for state in all_states:
-        fp = os.path.join(out_dir, 'compar_table.' + state + '.tsv')
-        compar_df = pd.read_csv(fp, sep='\t', header=0)
-        compar_df['protein'] = compar_df['protein'].fillna('')
-        compar_df = compar_df[
-            (compar_df['protein'].isin(protein_group))
-            | ((compar_df['protein'] == '') & (compar_df['descrip'].isin(descrip_group)))
-            ]
-        protein_df = pd.DataFrame(columns=['group', 'protein', 'descrip'])
-        protein_df['protein'] = compar_df['protein']
-        protein_df['descrip'] = compar_df['descrip']
-        groups = []
-        for p, d in zip(compar_df['protein'].tolist(), compar_df['descrip'].tolist()):
-            if p == '':
-                groups.append(descrip_group[d])
-            else:
-                groups.append(protein_group[p])
-        protein_df['group'] = groups
-
-        for bin in bin_names:
-            bin_scores = []
-            bin_df = compar_df[[bin + '_mean', bin + '_count']]
-            bin_df.fillna(0, inplace=True)
-            protein_df[bin] = bin_df[bin + '_mean'] * bin_df[bin + '_count']
-
-        protein_df.sort_values(['group', 'protein'], inplace=True)
-        protein_df.to_csv(
-            os.path.join(out_dir, 'protein_score.' + state + '.tsv'), sep='\t', index=False
-            )
-
-        group_df = protein_df.groupby('group').sum()
-        group_df = group_df.div(group_df.max(1), axis=0)
-        group_df.to_csv(os.path.join(out_dir, 'group_score.' + state + '.tsv'), sep='\t')
-
     return
 
 def get_args():
@@ -726,6 +671,8 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)[
             ['protein', 'descrip', 'cog', 'bitscore'] + ranks
         ]
+        # Group peptide results for bin into protein results
+        # First consider peptides with protein name annotations
         protein_gb = bin_df[pd.notnull(bin_df['protein'])].groupby('protein')
         protein_df = protein_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
         protein_df['protein'] = [protein for protein, _ in protein_gb]
@@ -734,6 +681,7 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
         protein_df.reset_index(inplace=True, drop=True)
         protein_df[ranks] = merge_ranks(protein_gb)
         del(protein_gb)
+        # Second consider peptides that only have description string annotations
         bin_df['descrip_lowercase'] = bin_df['descrip'].str.lower()
         descrip_gb = bin_df[pd.isnull(bin_df['protein'])].groupby('descrip_lowercase')
         descrip_df = descrip_gb['bitscore'].agg(['mean', 'min', 'max', 'count'])
@@ -743,6 +691,7 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
         descrip_df[ranks] = merge_ranks(descrip_gb)
         del(descrip_gb)
         del(bin_df)
+        # Summarize the information from each bin in a table, with a block of columns for each bin
         bin_summary_df = pd.concat([protein_df, descrip_df], ignore_index=True)
         del(protein_df)
         del(descrip_df)
@@ -760,6 +709,7 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
         compar_df = compar_df.merge(bin_summary_df, how='outer', on=compar_table_merge_hdrs)
         del(bin_summary_df)
 
+    # Find an LCA lineage of the protein from the PSM-ORF data
     ranks_df = pd.DataFrame(columns=compar_table_merge_hdrs + ranks)
     for bin_name in bin_names:
         bin_rank_cols = [bin_name + '_' + rank for rank in ranks]
@@ -778,6 +728,7 @@ def compare_bins(bin_table_fps, compar_table_basename='bin_compar.tsv'):
     ranks_df['protein'] = ranks_df['protein'].fillna('')
     compar_df[ranks] = merge_ranks(ranks_df.groupby(compar_table_merge_hdrs, as_index=False))
 
+    # Count the number of peptides in each bin that were found for the protein
     compar_df['total_count'] = 0
     for bin_name in bin_names:
         bin_count_hdr = bin_name + '_count'
@@ -821,6 +772,7 @@ def compare_states(state_compar_table_fp):
         for state, compar_table_fp in state_compar_table_fp.items()
     ])
 
+    # Merge sample columns from each state's sample comparison table
     num_cols = len(list(state_compar_table.values())[0].columns)
     all_state_df = pd.DataFrame(columns=compar_table_merge_hdrs)
     i = 0
@@ -863,6 +815,64 @@ def compare_states(state_compar_table_fp):
     all_state_df.to_csv(all_state_table_fp, sep='\t', index=False)
 
     return
+
+def assign_groups(assign_fp):
+    '''
+    Assign proteins and descriptions to groups
+    '''
+
+    assign_df = pd.read_csv(
+        assign_fp, sep='\t', header=0, names=['group', 'protein', 'descrip']
+        )
+    assign_df.fillna('', inplace=True)
+    protein_group = OrderedDict([
+        (p, g) for p, g 
+        in zip(assign_df['protein'].tolist(), assign_df['group'])
+        if p != ''
+        ])
+    descrip_group = OrderedDict([
+        (d, g) for d, g 
+        in zip(assign_df['descrip'].tolist(), assign_df['group'])
+        if d != ''
+        ])
+    
+    for state in all_states:
+        fp = os.path.join(out_dir, 'compar_table.' + state + '.tsv')
+        compar_df = pd.read_csv(fp, sep='\t', header=0)
+        compar_df['protein'] = compar_df['protein'].fillna('')
+        compar_df = compar_df[
+            (compar_df['protein'].isin(protein_group))
+            | ((compar_df['protein'] == '') & (compar_df['descrip'].isin(descrip_group)))
+            ]
+        protein_df = pd.DataFrame(columns=['group', 'protein', 'descrip'])
+        protein_df['protein'] = compar_df['protein']
+        protein_df['descrip'] = compar_df['descrip']
+        groups = []
+        for p, d in zip(compar_df['protein'].tolist(), compar_df['descrip'].tolist()):
+            if p == '':
+                groups.append(descrip_group[d])
+            else:
+                groups.append(protein_group[p])
+        protein_df['group'] = groups
+
+        for bin in bin_names:
+            bin_scores = []
+            bin_df = compar_df[[bin + '_mean', bin + '_count']]
+            bin_df.fillna(0, inplace=True)
+            protein_df[bin] = bin_df[bin + '_mean'] * bin_df[bin + '_count']
+
+        protein_df.sort_values(['group', 'protein'], inplace=True)
+        protein_df.to_csv(
+            os.path.join(out_dir, 'protein_score.' + state + '.tsv'), sep='\t', index=False
+            )
+
+        group_df = protein_df.groupby('group').sum()
+        score_df = group_df.div(group_df.max(0), axis=1)
+        propor_df.to_csv(
+            os.path.join(out_dir, 'bin.group_score.' + state + '.tsv'), sep='\t'
+            )
+
+    return score_df
 
 if __name__ == '__main__':
     main()
