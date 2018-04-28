@@ -502,7 +502,6 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
     '''
 
     blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
-    blast_df = blast_df[blast_df['length'] >= 9]
     blast_df = blast_df[blast_df['evalue'] <= 0.01]    
     blast_df['scan'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[0]))
     blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[1]))
