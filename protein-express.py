@@ -425,7 +425,8 @@ def stateless_pipeline(blast_db_fps, query_fasta_fps):
             )
             if os.path.exists(blast_table_fp):
                 print(blast_table_fp, 'already exists', flush=True)
-            else:run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
+            else:
+                run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
             postnovo_table_fp = os.path.join(prot_dirs[i], 'reported_df.tsv')
             peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
             parse_blast_table(
