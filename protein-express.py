@@ -219,7 +219,7 @@ def make_blast_db(bin_fp):
 
 def make_query_fasta(prot_dir):
     '''
-    Recover PSM protein sequences for search against bins
+    Recover PSM ORF sequences for search against bins
     '''
 
     postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
