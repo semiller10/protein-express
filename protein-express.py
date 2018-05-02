@@ -62,6 +62,8 @@ bin_table_hdrs = [
     ] + ranks
 compar_table_merge_hdrs = ['protein', 'descrip', 'cog']
 
+sig_cutoff = 27
+
 def main():
 
     args = get_args()
@@ -81,14 +83,17 @@ def main():
         global all_states
         all_states = list(set(state_df.iloc[:, 1].tolist()))
 
+    # Predict genes from bin contigs
     run_prodigal()
 
+    # Make BLAST+ database from each bin
     blast_db_fps = []
     for bin_basename in os.listdir(bin_dir):
         blast_db_fps.append(make_blast_db(os.path.join(bin_dir, bin_basename)))
     global bin_names
     bin_names = [os.path.basename(blast_db_fp) for blast_db_fp in blast_db_fps]
 
+    # BLAST PSM ORFs against bins
     query_fasta_fps = []
     for prot_dir in args.prot_dirs:
         prot_name = os.path.normpath(os.path.basename(prot_dir))
@@ -220,9 +225,10 @@ def make_query_fasta(prot_dir):
     postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
     reported_peptide_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)
     scans = reported_peptide_df['scan_list'].tolist()
+    # Dataset (e.g., metagenome) origins of unique ORFs containing PSMs
     best_predict_origins = reported_peptide_df['best_predicts_from'].tolist()
     best_predict_origins = [s.split(',') for s in best_predict_origins]
-    # Peptides may match a subsequence of a longer ORF from another dataset
+    # Origins of non-unique ORFs with PSMs that are subseqs of unique ORFs
     redun_predict_origins = reported_peptide_df['also_contains_predicts_from'].tolist()
     redun_predict_origins = [
         [''] if pd.isnull(s) else s.split(',') for s in redun_predict_origins
@@ -251,13 +257,14 @@ def make_query_fasta(prot_dir):
             l += m
 
     prot_name = os.path.normpath(os.path.basename(prot_dir))
+    # Get the names of all origin datasets
     fasta_fps = glob(
         os.path.join(prot_dir, prot_name + '.*.reads.fasta')
     )
     fasta_fps += glob(
         os.path.join(prot_dir, prot_name + '.*.DBGraphPep2Pro.fasta')
     )
-    # Record the seqs and ids from the origin fastas
+    # Record the ORF seqs and ids from the origin fastas
     fasta_ids = OrderedDict()
     fasta_seqs = OrderedDict()
     for fasta_fp in fasta_fps:
@@ -269,7 +276,7 @@ def make_query_fasta(prot_dir):
         assert len(fasta_ids[ref_name]) == len(fasta_seqs[ref_name]), \
         fasta_fp + ' does not have an even number of lines'
 
-    # Record the scans, peptides, and (partial) protein hits from each file of db search results
+    # Record the scans, peptides, and ORF seqs from each file of db search results
     db_search_scans = OrderedDict().fromkeys(fasta_ids)
     db_search_peps = OrderedDict().fromkeys(fasta_ids)
     db_search_hits = OrderedDict().fromkeys(fasta_ids)
@@ -337,6 +344,7 @@ def make_query_fasta(prot_dir):
         orfs_scan = orfs[first_scan]
         if orfs_scan:
             for i, orf in enumerate(orfs_scan):
+                # Index the ORFs containing the same peptide
                 seq_id = '>' + str(first_scan) + '.' + str(i) + '\n'
                 query_fasta.append(seq_id)
                 query_fasta.append(orf + '\n')
@@ -404,6 +412,7 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
 def stateless_pipeline(blast_db_fps, query_fasta_fps):
 
     bin_table_fps = []
+    # Search each bin
     for i, bin_name in enumerate(bin_names):
         blast_db_fp = blast_db_fps[i]
         bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
@@ -858,6 +867,7 @@ def assign_groups(assign_fp):
             bin_scores = []
             bin_df = compar_df[[bin + '_mean', bin + '_count']]
             bin_df.fillna(0, inplace=True)
+            bin_df[bin + '_mean'] = bin_df[bin + '_mean'] - sig_cutoff
             protein_df[bin] = bin_df[bin + '_mean'] * bin_df[bin + '_count']
 
         protein_df.sort_values(['group', 'protein'], inplace=True)
