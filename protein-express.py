@@ -314,7 +314,7 @@ def make_query_fasta(prot_dir):
                 j = db_search_scans[ref_name].index(scan)
                 db_search_ref_peps = db_search_peps[ref_name]
                 for hit in db_search_hits[ref_name][j]:
-                    # I'm not sure if this next exception can ever occur...
+                    # I don't remember why I included the next exception, and don't think it occurs
                     try:
                         k = fasta_ids[ref_name].index(hit)
                         orf = fasta_seqs[ref_name][k]

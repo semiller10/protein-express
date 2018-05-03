@@ -73,5 +73,29 @@ def main():
 
     return
 
+def add_len_col():
+
+    reported_df = pd.read_csv(os.path.join(out_dir, 'reported_df.tsv'), sep='\t', header=0)
+    reported_df['first_scan'] = reported_df['scan_list'].apply(lambda l: l.split(',')[0])
+    lens_df = pd.read_csv(
+        os.path.join(out_dir, 'avg_protein_lens.tsv'), 
+        dtype={'first_scan': str, 'avg_protein_len': str}, 
+        sep='\t', 
+        header=0
+    )
+    lens_df.set_index('first_scan', inplace=True)
+    lens_df = lens_df[['avg_protein_len']]
+    lens_df.columns = ['protein length']
+    lens_df['protein length'] = lens_df['protein length'].apply(int).apply(str)
+    lens_df = lens_df.groupby(lens_df.index).first()
+    new_header = reported_df.columns.tolist()
+    new_header.insert(new_header.index('scan count') + 1, 'protein length')
+    new_reported_df = reported_df.merge(lens_df, how='outer', left_on=reported_df['first_scan'], right_index=True)
+    new_reported_df = new_reported_df[new_header]
+    new_reported_df.to_csv(os.path.join(out_dir, 'reported_df2.tsv'), sep='\t', index=False)
+
+    return
+
 if __name__ == '__main__':
-    main()
+    #main()
+    add_len_col()
