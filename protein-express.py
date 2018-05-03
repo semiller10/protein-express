@@ -45,6 +45,8 @@ bin_table_hdrs = [
     'scan', 
     'seqnum', 
     'peptide', 
+    'speccount', 
+    'protlen', 
     'sseqid', 
     'pident', 
     'length', 
@@ -526,10 +528,15 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
     postnovo_df.set_index('scan', inplace=True)
     postnovo_df = postnovo_df.loc[blast_df['scan'].tolist()].reset_index()
     postnovo_df = postnovo_df[
-        ['scan', 'predicted name', 'cog cat', 'eggnog hmm desc'] + ranks
+        ['scan', 'scan count', 'protein length', 'predicted name', 'cog cat', 'eggnog hmm desc'] + ranks
     ]
     postnovo_df.rename(
-        columns={'predicted name': 'protein', 'cog cat': 'cog', 'eggnog hmm desc': 'descrip'}, 
+        columns={
+            'scan count': 'speccount', 
+            'protein length': 'protlen', 
+            'predicted name': 'protein', 
+            'cog cat': 'cog', 
+            'eggnog hmm desc': 'descrip'}, 
         inplace=True
     )
     assert len(blast_df) == len(postnovo_df)
