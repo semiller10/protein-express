@@ -45,6 +45,7 @@ bin_table_hdrs = [
     'scan', 
     'seqnum', 
     'peptide', 
+    'scans', 
     'speccount', 
     'protlen', 
     'sseqid', 
@@ -97,14 +98,17 @@ def main():
 
     # BLAST PSM ORFs against bins
     query_fasta_fps = []
+    global prot_names
+    prot_names = []
     for prot_dir in args.prot_dirs:
         prot_name = os.path.normpath(os.path.basename(prot_dir))
+        prot_names.append(prot_name)
         query_fasta_dir = os.path.join(out_dir, prot_name + '.bin_search')
         query_fasta_fps.append(os.path.join(query_fasta_dir, prot_name + '.blastp_queries.faa'))
         if os.path.exists(query_fasta_fps[-1]):
             print('Query path', query_fasta_fps[-1], 'already exists', flush=True)
         else:
-            make_query_fasta(prot_dir)
+            make_query_fasta(prot_name, prot_dir)
 
     if prot_state:
         state_pipeline(prot_state, blast_db_fps, query_fasta_fps)
@@ -219,7 +223,7 @@ def make_blast_db(bin_fp):
 
     return blast_db_fp    
 
-def make_query_fasta(prot_dir):
+def make_query_fasta(prot_name, prot_dir):
     '''
     Recover PSM ORF sequences for search against bins
     '''
@@ -258,7 +262,6 @@ def make_query_fasta(prot_dir):
         else:
             l += m
 
-    prot_name = os.path.normpath(os.path.basename(prot_dir))
     # Get the names of all origin datasets
     fasta_fps = glob(
         os.path.join(prot_dir, prot_name + '.*.reads.fasta')
@@ -370,8 +373,7 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
             state_bin_table_fp[state].append(bin_table_fp)
             bin_table_fps_for_bin.append(bin_table_fp)
         bin_table_fps += bin_table_fps_for_bin
-        for i, query_fasta_fp in enumerate(query_fasta_fps):
-            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
+        for prot_name, query_fasta_fp, prot_dir in zip(prot_names, query_fasta_fps, prot_dirs):
             state = prot_state[prot_name]
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
             blast_table_fp = os.path.join(
@@ -381,7 +383,7 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
                 print(blast_table_fp, 'already exists', flush=True)
             else:
                 run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
-            postnovo_table_fp = os.path.join(prot_dirs[i], 'reported_df.tsv')
+            postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
             peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
             # UNCOMMENT
             # parse_blast_table(
@@ -419,8 +421,7 @@ def stateless_pipeline(blast_db_fps, query_fasta_fps):
         blast_db_fp = blast_db_fps[i]
         bin_table_fp = os.path.join(out_dir, bin_name + '.blast_out.txt')
         bin_table_fps.append(bin_table_fp)
-        for i, query_fasta_fp in enumerate(query_fasta_fps):
-            prot_name = os.path.basename(query_fasta_fp).replace('.blastp_queries.faa', '')
+        for prot_name, query_fasta_fp, prot_dir in zip(prot_names, query_fasta_fps, prot_dirs):
             search_dir = os.path.join(out_dir, prot_name + '.bin_search')
             blast_table_fp = os.path.join(
                 search_dir, prot_name + '.' + bin_name + '.blastp_hits.out'
@@ -429,12 +430,21 @@ def stateless_pipeline(blast_db_fps, query_fasta_fps):
                 print(blast_table_fp, 'already exists', flush=True)
             else:
                 run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
-            postnovo_table_fp = os.path.join(prot_dirs[i], 'reported_df.tsv')
+            postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
             peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
             parse_blast_table(
                 prot_name, blast_table_fp, blast_db_fp, postnovo_table_fp, peps_fp, bin_table_fp
             )
         remove_redun_peps(bin_table_fps[-1])
+
+    # Calculate spectral count statistics for each proteome
+    for prot_name, prot_dir in zip(prot_names, prot_dirs):
+        postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
+        postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)[
+            pd.notnull(postnovo_df['protein length'])
+        ]
+        postnovo_df['SAF'] = postnovo_df['scan count'] / postnovo_df['protein length']
+
 
     systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
@@ -514,43 +524,57 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
     '''
 
     blast_df = pd.read_csv(out_fp, sep='\t', names=blast_table_hdrs, dtype={'qseqid': str})
-    blast_df = blast_df[blast_df['evalue'] <= 0.01]    
+    #BLAST+ is currently set to report alignments with an evalue <= 0.01
+    #blast_df = blast_df[blast_df['evalue'] <= 0.01]
     blast_df['scan'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[0]))
     blast_df['seqnum'] = blast_df['qseqid'].apply(lambda s: int(s.split('.')[1]))
     blast_df.drop('qseqid', axis=1, inplace=True)
+    #Retain the ORF with the lowest evalue for each peptide
     blast_df = blast_df[blast_df.groupby('scan')['evalue'].transform(min) == blast_df['evalue']]
     blast_df = blast_df.groupby('scan', as_index=False).first()
     blast_df.sort_values('scan', inplace=True)
 
-    postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)
+    postnovo_df = pd.read_csv(postnovo_table_fp, dtype={'scan count': str}, sep='\t', header=0)
+    # Each peptide is ID'd by the first scan in the scan list
     postnovo_df['scan'] = postnovo_df['scan_list'].apply(lambda s: int(s.split(',')[0]))
     postnovo_df.sort_values('scan', inplace=True)
     postnovo_df.set_index('scan', inplace=True)
     postnovo_df = postnovo_df.loc[blast_df['scan'].tolist()].reset_index()
     postnovo_df = postnovo_df[
-        ['scan', 'scan count', 'protein length', 'predicted name', 'cog cat', 'eggnog hmm desc'] + ranks
+        [
+            'scan', 
+            'scan_list', 
+            'scan count', 
+            'protein length', 
+            'predicted name', 
+            'cog cat', 
+            'eggnog hmm desc'
+        ] + ranks
     ]
     postnovo_df.rename(
         columns={
+            'scan_list': 'scans', 
             'scan count': 'speccount', 
             'protein length': 'protlen', 
             'predicted name': 'protein', 
             'cog cat': 'cog', 
-            'eggnog hmm desc': 'descrip'}, 
+            'eggnog hmm desc': 'descrip'
+        }, 
         inplace=True
     )
     assert len(blast_df) == len(postnovo_df)
-    blast_df = blast_df.merge(postnovo_df, on='scan')
+    merged_df = blast_df.merge(postnovo_df, on='scan')
+    del(blast_df)
 
     with open(peps_fp, 'rb') as handle:
         peps = pkl.load(handle)
     orf_peps = []
-    seq_nums = blast_df['seqnum'].tolist()
-    for i, scan in enumerate(blast_df['scan'].tolist()):
-        orf_peps.append(peps[scan][seq_nums[i]].translate(trans_table))
-    blast_df['peptide'] = orf_peps
+    seq_nums = merged_df['seqnum'].tolist()
+    for scan, seq_num in zip(merged_df['scan'].tolist(), seq_nums):
+        orf_peps.append(peps[scan][seq_num].translate(trans_table))
+    merged_df['peptide'] = orf_peps
 
-    blast_df['scan'] = blast_df['scan'].apply(str)
+    merged_df['scan'] = merged_df['scan'].apply(str)
 
     try:
         bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
@@ -568,7 +592,11 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
     return bin_table_fp
 
 def remove_redun_peps(bin_table_fp):
-
+    
+    #When a peptide is found in multiple proteomic datasets, 
+    #all instances are compared to the same reference data, 
+    #so all instances have the same ORFs, 
+    #so all instances have the same bin alignment results.
     bin_df = pd.read_csv(bin_table_fp, sep='\t', header=0)
     bin_df = bin_df.groupby('peptide', as_index=False).first()
     bin_df = bin_df[bin_table_hdrs]
