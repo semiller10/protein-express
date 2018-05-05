@@ -10,8 +10,10 @@ io_dir = 'C:\\Users\\Samuel\\Desktop\\postnovo_jpr_materials\\soil_interpretatio
 input_f = 'unique_ko_entries.tsv'
 cores = 4
 
+chunk_size = 100
 ko_ec_f = 'ko_ec.tsv'
 ec_map_f = 'ec_map.tsv'
+map_name_f = 'map_name.tsv'
 
 def main():
 
@@ -25,7 +27,6 @@ def main():
             all_kos.append(i)
     unique_kos = sorted(list(set(all_kos)))
 
-    chunk_size = 100
     ko_chunks = []
     ko_chunk = ''
     for i, ko in enumerate(unique_kos):
@@ -99,6 +100,42 @@ def main():
         for ec, map_ids in ec_map_dict.items():
             handle.write(ec + '\t' + ','.join(map_ids) + '\n')
 
+    #Map Pathway Map ID to Pathway Name
+    unique_maps = sorted(list(set(
+        [map_id for map_ids in ec_map_dict.values() for map_id in map_ids]
+    )))
+    map_chunks = []
+    map_chunk = ''
+    for i, map_id in enumerate(unique_maps):
+        if map_chunk == '':
+            map_chunk = map_id
+        else:
+            map_chunk += '+' + map_id
+        if i % chunk_size == chunk_size - 1:
+            map_chunks.append(map_chunk)
+            map_chunk = ''
+
+    ##Singlethreaded
+    #map_info = []
+    #for map_chunk in map_chunks:
+        #map_info += kegg_list_worker(map_chunk)
+
+    #Multithreaded
+    pool = mp.Pool(cores)
+    map_info = pool.map(kegg_list_worker, map_chunks)
+    pool.close()
+    pool.join()
+    #Returns list of lists for each chunk
+    map_info = [i for chunk_info in map_info for i in chunk_info]
+
+    with open(os.path.join(io_dir, map_name_f), 'w') as handle:
+        handle.write('Map ID\tMap Name\n')
+        for s in map_info:
+            entry = s.split('\t')
+            map_id = entry[0].replace('path:', '')
+            name = entry[1].rstrip()
+            handle.write(map_id + '\t' + name + '\n')
+
     return
 
 def kegg_list_worker(query):
@@ -106,6 +143,7 @@ def kegg_list_worker(query):
     while True:
         try:
             entry = kegg.kegg_list(query).readlines()
+            print(entry)
             break
         except:
             print('Retrying: ' + query)
@@ -116,7 +154,6 @@ def kegg_list_worker(query):
 
 def kegg_link_worker(query, db='path'):
 
-    print(query)
     while True:
         try:
             entry = kegg.kegg_link(db, query).readlines()

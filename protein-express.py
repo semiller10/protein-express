@@ -76,6 +76,12 @@ def main():
     out_dir = args.out
     num_threads = args.threads
 
+    global kegg_dir
+    if args.kegg_dir != None:
+        kegg_dir = args.kegg_dir
+    else:
+        kegg_dir = None
+
     prot_state = OrderedDict()
     if args.state != None:
         state_df = pd.read_csv(args.state, sep='\t', header=0)
@@ -131,34 +137,39 @@ def get_args():
         '--prot_dirs', 
         nargs='+', 
         help='List of directories for each proteomic dataset'
-        )
+    )
     parser.add_argument(
         '-b', 
         '--bin_dir', 
         help='Directory exclusively containing bin fastas'
-        )
+    )
     parser.add_argument(
         '-o', 
         '--out', 
         help='Output directory'
-        )
+    )
+    parser.add_argument(
+        '-k', 
+        '--kegg_dir', 
+        help='Directory containing ko_ec.tsv, ec_map.tsv, map_name.tsv'
+    )
     parser.add_argument(
         '-s', 
         '--state', 
         help='Table relating each proteome name to a state'
-        )
+    )
     parser.add_argument(
         '-g', 
         '--group', 
         help='Table relating protein names or descriptions to groups'
-        )
+    )
     parser.add_argument(
         '-t', 
         '--threads', 
         type=int, 
         default=1, 
         help='Number of threads'
-        )
+    )
 
     args = parser.parse_args()
 
@@ -437,14 +448,20 @@ def stateless_pipeline(blast_db_fps, query_fasta_fps):
             )
         remove_redun_peps(bin_table_fps[-1])
 
-    # Calculate spectral count statistics for each proteome
+    # Calculate spectral count statistics for each proteomic sample
     for prot_name, prot_dir in zip(prot_names, prot_dirs):
         postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
         postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)[
             pd.notnull(postnovo_df['protein length'])
         ]
         postnovo_df['SAF'] = postnovo_df['scan count'] / postnovo_df['protein length']
-
+        
+        if kegg_dir != None:
+            kegg_df = postnovo_df[pd.notnull(postnovo_df['kegg pathways'])]
+            ko_ec_dict = OrderedDict()
+            with open(os.path.join(kegg_dir, 'ko_ec_f.tsv')) as handle:
+                for entry in [s.rstrip().split('\t') for s in handle.readlines()]:
+                    ko_ec_dict[entry[0]] = entry[1].split(',')
 
     systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
