@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 
 import argparse
+import Bio.KEGG.REST as kegg
 from collections import OrderedDict
+from copy import deepcopy
 from functools import partial
 from glob import glob
 import multiprocessing as mp
@@ -396,31 +398,35 @@ def state_pipeline(prot_state, blast_db_fps, query_fasta_fps):
                 run_blastp(blast_db_fp, query_fasta_fp, blast_table_fp)
             postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
             peps_fp = os.path.join(search_dir, prot_name + '.peps.pkl')
-            # UNCOMMENT
-            # parse_blast_table(
-            #     prot_name, 
-            #     blast_table_fp, 
-            #     blast_db_fp, 
-            #     postnovo_table_fp, 
-            #     peps_fp, 
-            #     os.path.join(out_dir, bin_name + '.' + state + '.blast_out.txt')
-            # )
+            ## UNCOMMENT
+            #parse_blast_table(
+            #    prot_name, 
+            #    blast_table_fp, 
+            #    blast_db_fp, 
+            #    postnovo_table_fp, 
+            #    peps_fp, 
+            #    os.path.join(out_dir, bin_name + '.' + state + '.blast_out.txt')
+            #)
         for bin_table_fp in bin_table_fps_for_bin:
             remove_redun_peps(bin_table_fp)
 
-    # UNCOMMENT
+    ## UNCOMMENT
     #systematize_annot(bin_table_fps)
     state_compar_table_fp = OrderedDict().fromkeys(state_bin_table_fp)
-    # UNCOMMENT
-    # for state, bin_table_fps_for_state in state_bin_table_fp.items():
-    #     compar_table_basename = 'compar_table.' + state + '.tsv'
-    #     state_compar_table_fp[state] = compare_bins(
-    #         bin_table_fps_for_state, compar_table_basename
-    #     )
+    ## UNCOMMENT
+    #for state, bin_table_fps_for_state in state_bin_table_fp.items():
+    #    compar_table_basename = 'compar_table.' + state + '.tsv'
+    #    state_compar_table_fp[state] = compare_bins(
+    #        bin_table_fps_for_state, compar_table_basename
+    #    )
     state_compar_table_fp['tussock'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.tussock.tsv'
     state_compar_table_fp['intertussock'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.intertussock.tsv'
     state_compar_table_fp['shrub'] = '/scratch/samuelmiller/12-26-17/postnovo/io/toolik/protein-express_out/compar_table.shrub.tsv'
     compare_states(state_compar_table_fp)
+
+    #Make tables of NSAF statistics for proteins in KEGG maps
+    if kegg_dir != None:
+        make_vanted_map_tables(prot_state)
 
     return
 
@@ -448,23 +454,483 @@ def stateless_pipeline(blast_db_fps, query_fasta_fps):
             )
         remove_redun_peps(bin_table_fps[-1])
 
-    # Calculate spectral count statistics for each proteomic sample
-    for prot_name, prot_dir in zip(prot_names, prot_dirs):
-        postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
-        postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)[
-            pd.notnull(postnovo_df['protein length'])
-        ]
-        postnovo_df['SAF'] = postnovo_df['scan count'] / postnovo_df['protein length']
-        
-        if kegg_dir != None:
-            kegg_df = postnovo_df[pd.notnull(postnovo_df['kegg pathways'])]
-            ko_ec_dict = OrderedDict()
-            with open(os.path.join(kegg_dir, 'ko_ec_f.tsv')) as handle:
-                for entry in [s.rstrip().split('\t') for s in handle.readlines()]:
-                    ko_ec_dict[entry[0]] = entry[1].split(',')
-
     systematize_annot(bin_table_fps)
     compare_bins(bin_table_fps)
+
+    #Make tables of NSAF statistics for proteins in KEGG maps
+    if kegg_dir != None:
+        prot_state = OrderedDict()
+        for prot_name in prot_names:
+            prot_state[prot_name] = prot_name
+        global all_states
+        all_states = list(set(prot_state.values()))
+        make_vanted_map_tables(prot_state)
+
+    return
+
+def vanted_col_setup():
+
+    #Make table formatted for plotting pathway map graphs in Vanted
+    vanted_cols = OrderedDict()
+    vanted_cols[0] = [''] * 22
+    vanted_cols[0][0] = 'VANTED - Input File'
+    vanted_cols[0][2] = 'Experiment'
+    vanted_cols[0][3] = 'Start of Experiment (Date)'
+    vanted_cols[0][4] = 'Remark*'
+    vanted_cols[0][5] = 'Experiment Name (ID)'
+    vanted_cols[0][6] = 'Coordinator'
+    vanted_cols[0][7] = 'Sequence-Name*'
+    vanted_cols[0][10] = 'Plants/Genotypes**'
+    vanted_cols[0][11] = 'Species'
+    vanted_cols[0][12] = 'Variety*'
+    vanted_cols[0][13] = 'Genotype'
+    vanted_cols[0][14] = 'Growth conditions*'
+    vanted_cols[0][15] = 'Treatment*'
+    vanted_cols[0][19] = 'Measurements'
+    vanted_cols[0][21] = 'Plant/Genotype***'
+
+    vanted_cols[1] = [''] * 22
+    vanted_cols[1][3] = '1/1/2018'
+    vanted_cols[1][5] = 'Experiment'
+    vanted_cols[1][6] = 'Scientist'
+    vanted_cols[1][21] = 'Replicate #'
+
+    vanted_cols[2] = [''] * 22
+    vanted_cols[2][21] = 'Time*'
+
+    vanted_cols[3] = [''] * 22
+    vanted_cols[3][21] = 'Unit (Time)*'
+
+    vanted_cols[4] = [''] * 22
+    vanted_cols[4][2] = 'Important Info'
+    vanted_cols[4][3] = '- Fields with a * are optional'
+    vanted_cols[4][4] = '- Yellow cells allow input'
+    vanted_cols[4][5] = '** These cells must contain numbers as 1, 2, 3, ...'
+    vanted_cols[4][6] = '*** These cells must correlate to the numbers in **'
+    vanted_cols[4][7] = '- The Experiment Name must be unique in the whole database'
+    vanted_cols[4][19] = 'Substance'
+    vanted_cols[4][20] = 'Meas.-Tool*'
+    vanted_cols[4][21] = 'Unit'
+
+    vanted_cols[5] = [''] * 22
+    vanted_cols[6] = [''] * 22
+    vanted_cols[7] = [''] * 22
+    vanted_cols[8] = [''] * 22
+    vanted_cols[9] = [''] * 22
+    vanted_cols[10] = [''] * 22
+    vanted_cols[10][2] = 'Internal Info'
+    vanted_cols[10][3] = 'v1.2'
+
+    if len(all_states) > 11:
+        for i in range(11, len(all_states)):
+            vanted_cols[i] = [''] * 22
+
+    vanted_row_names = OrderedDict()
+    vanted_row_names['Plants/Genotypes**'] = 10
+    vanted_row_names['Species'] = 11
+    vanted_row_names['Genotype'] = 13
+
+    return vanted_cols, vanted_row_names
+
+def make_vanted_map_tables(prot_state_dict):
+
+    vanted_cols, vanted_row_names = vanted_col_setup()
+
+    #Mapping of KO IDs to lists of EC IDs
+    ko_ec_dict = OrderedDict()
+    with open(os.path.join(kegg_dir, 'ko_ec.tsv')) as handle:
+        for entry in [s.rstrip().split('\t') for s in handle.readlines()[1:]]:
+            ko_ec_dict[entry[0]] = entry[1].split(',')
+    #Mapping of EC IDs to Map IDs
+    ec_map_dict = OrderedDict()
+    with open(os.path.join(kegg_dir, 'ec_map.tsv')) as handle:
+        for entry in [s.rstrip().split('\t') for s in handle.readlines()[1:]]:
+            ec_map_dict[entry[0]] = entry[1].split(',')
+    #Mapping of Map IDs to Pathway Names
+    map_name_dict = OrderedDict()
+    with open(os.path.join(kegg_dir, 'map_name.tsv')) as handle:
+        for entry in [s.rstrip().split('\t') for s in handle.readlines()[1:]]:
+            map_name_dict[entry[0]] = entry[1]
+
+    #Three strategies for assigning SAF to protein functional annotations:
+    #Only consider peptides with KEGG KO IDs, grouping results by KEGG KO ID
+    #Only consider peptides with gene family names, grouping results by gene family name
+    #Consider peptides with KEGG KO IDs, 
+    #then consider peptides with gene family names lacking KEGG KO IDs, 
+    #grouping by KEGG KO ID or gene family name
+
+    #Mapping of EC ID to score for each proteomic sample
+    ec_saf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    sample_ec_nsaf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    state_ec_nsaf_dicts = OrderedDict(
+        [(state, OrderedDict()) for state in all_states]
+    )
+    #Mapping of gene family name to score for each proteomic sample
+    gene_saf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    sample_gene_nsaf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    state_gene_nsaf_dicts = OrderedDict(
+        [(state, OrderedDict()) for state in all_states]
+    )
+    #Mapping of gene family name (for peptides without KEGG KO IDs) to score for each proteomic sample
+    gene_wout_ec_saf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    sample_gene_wout_ec_nsaf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    state_gene_wout_ec_nsaf_dicts = OrderedDict(
+        [(state, OrderedDict()) for state in all_states]
+    )
+    #Mapping of Map ID to summed EC NSAF values for each state
+    sample_map_nsaf_dicts = OrderedDict(
+        [(prot_name, OrderedDict()) for prot_name in prot_state_dict]
+    )
+    state_map_nsaf_dicts = OrderedDict(
+        [(state, OrderedDict()) for state in all_states]
+    )
+    #Mapping of Map ID to EC IDs
+    map_ec_dict = OrderedDict()
+    #Spectrum count per sample
+    sample_count_dict = OrderedDict([(prot_name, 0) for prot_name in prot_state_dict])
+    #Spectrum count per state
+    state_count_dict = OrderedDict([(state, 0) for state in all_states])
+    
+    #Add general Vanted input table information for each state
+    for i, state in enumerate(all_states):
+        vanted_cols[i + 1][vanted_row_names['Plants/Genotypes**']] = i + 1
+        vanted_cols[i + 1][vanted_row_names['Species']] = state
+        vanted_cols[i + 1][vanted_row_names['Genotype']] = 'Mixed'
+        vanted_cols[0].append(i + 1)
+        vanted_cols[1].append(1)
+        vanted_cols[2].append(0)
+        vanted_cols[3].append('day')
+
+    for prot_name, prot_dir in zip(prot_names, prot_dirs):
+        # Calculate spectral count statistics for every unique peptide in a sample
+        postnovo_table_fp = os.path.join(prot_dir, 'reported_df.tsv')
+        postnovo_df = pd.read_csv(postnovo_table_fp, sep='\t', header=0)
+        postnovo_df = postnovo_df[pd.notnull(postnovo_df['protein length'])]
+        postnovo_df['SAF'] = postnovo_df['scan count'] / postnovo_df['protein length']
+        sample_count_dict[prot_name] = postnovo_df['scan count'].sum()
+        state_count_dict[prot_state_dict[prot_name]] += sample_count_dict[prot_name]
+
+        #Peptides with KO IDs
+        kegg_df = postnovo_df[pd.notnull(postnovo_df['kegg pathways'])]
+        #Peptides with gene family name or KO IDs
+        gene_kegg_df = postnovo_df[
+            pd.notnull(postnovo_df['predicted name']) | 
+            pd.notnull(postnovo_df['kegg pathways'])
+        ]
+
+        #Record sample SAF values for peptides with gene family name
+        gene_saf_dict = gene_saf_dicts[prot_name]
+        gene_wout_ec_saf_dict = gene_wout_ec_saf_dicts[prot_name]
+        for gene_name, ko_entry, saf in zip(
+            gene_kegg_df['predicted name'].fillna('').tolist(), 
+            gene_kegg_df['kegg pathways'].fillna('').tolist(), 
+            gene_kegg_df['SAF'].fillna('').tolist()
+        ):
+            if ko_entry == '':
+                try:
+                    gene_wout_ec_saf_dict[gene_name] += saf
+                except KeyError:
+                    gene_wout_ec_saf_dict[gene_name] = saf
+            try:
+                gene_saf_dict[gene_name] += saf
+            except KeyError:
+                gene_saf_dict[gene_name] = saf
+
+        #Record sample SAF values for peptides with KEGG KO IDs
+        ec_saf_dict = ec_saf_dicts[prot_name]
+        for ko_entry, saf in zip(kegg_df['kegg pathways'].tolist(), kegg_df['SAF'].tolist()):
+            kos = ko_entry.split(',')
+            ko_count = len(kos)
+            for ko in kos:
+                try:
+                    for ec in ko_ec_dict[ko]:
+                        #When a peptide has multiple KO IDs, 
+                        #treat each of these as a separate guess at the true function, 
+                        #so scale the SAF by the number of KO IDs for the entry
+                        adjusted_saf = saf / ko_count
+                        try:
+                            ec_saf_dict[ec] += adjusted_saf
+                        except KeyError:
+                            ec_saf_dict[ec] = adjusted_saf
+                #KO ID doesn't map to an EC ID
+                except KeyError:
+                    pass
+
+    #Two ways of turning SAF into NSAF (determining which peptide count to use as denominator):
+    #By sample
+    #By class of sample (state) -- this treats samples in a state as a single "metasample"
+    for prot_name, state in prot_state_dict.items():
+
+        ec_saf_dict = ec_saf_dicts[prot_name]
+        sample_ec_nsaf_dict = sample_ec_nsaf_dicts[prot_name]
+        state_ec_nsaf_dict = state_ec_nsaf_dicts[state]
+        sample_map_nsaf_dict = sample_map_nsaf_dicts[prot_name]
+        state_map_nsaf_dict = state_map_nsaf_dicts[state]
+        for ec, saf in ec_saf_dict.items():
+            sample_nsaf = saf / sample_count_dict[prot_name]
+            state_nsaf = saf / state_count_dict[state]
+            sample_ec_nsaf_dict[ec] = sample_nsaf
+            try:
+                state_ec_nsaf_dict[ec] += state_nsaf
+            except KeyError:
+                state_ec_nsaf_dict[ec] = state_nsaf
+
+            #Determine the Pathway Maps associated with the EC IDs
+            try:
+                for map_id in ec_map_dict[ec]:
+                    try:
+                        map_ec_dict[map_id].append(ec)
+                    except KeyError:
+                        map_ec_dict[map_id] = [ec]
+                    try:
+                        sample_map_nsaf_dict[map_id] += sample_nsaf
+                    except KeyError:
+                        sample_map_nsaf_dict[map_id] = sample_nsaf
+                    try:
+                        state_map_nsaf_dict[map_id] += state_nsaf
+                    except KeyError:
+                        state_map_nsaf_dict[map_id] = state_nsaf
+            #EC ID doesn't map to a Map ID
+            except KeyError:
+                pass
+
+        gene_saf_dict = gene_saf_dicts[prot_name]
+        sample_gene_nsaf_dict = sample_gene_nsaf_dicts[prot_name]
+        state_gene_nsaf_dict = state_gene_nsaf_dicts[state]
+        for gene, saf in gene_saf_dict.items():
+            sample_gene_nsaf_dict[gene] = saf / sample_count_dict[prot_name]
+            try:
+                state_gene_nsaf_dict[gene] += saf / state_count_dict[state]
+            except KeyError:
+                state_gene_nsaf_dict[gene] = saf / state_count_dict[state]
+
+        gene_wout_ec_saf_dict = gene_wout_ec_saf_dicts[prot_name]
+        sample_gene_wout_ec_nsaf_dict = sample_gene_wout_ec_nsaf_dicts[prot_name]
+        state_gene_wout_ec_nsaf_dict = state_gene_wout_ec_nsaf_dicts[state]
+        for gene, saf in gene_wout_ec_saf_dict.items():
+            sample_gene_wout_ec_nsaf_dict[gene] = saf / sample_count_dict[prot_name]
+            try:
+                state_gene_wout_ec_nsaf_dict[gene] += saf / state_count_dict[state]
+            except KeyError:
+                state_gene_wout_ec_nsaf_dict[gene] = saf / state_count_dict[state]
+
+    #Dereplicate list of sample EC IDs for each Map ID
+    for map_id, ecs in map_ec_dict.items():
+        map_ec_dict[map_id] = list(set(ecs))
+
+    #Make a Vanted-formatted table for each Map ID, and add info for each EC ID
+    map_table_dict = OrderedDict()
+    map_nsaf_items = []
+    for state_map_nsaf_dict in state_map_nsaf_dicts.values():
+        map_nsaf_items += state_map_nsaf_dict.items()
+    unique_map_ids = [t[0] for t in sorted(map_nsaf_items, key=lambda t: -t[1])]
+    for map_id in unique_map_ids:
+        map_table_dict[map_id] = deepcopy(vanted_cols)
+        map_vanted_cols = map_table_dict[map_id]
+        for i, ec in enumerate(map_ec_dict[map_id]):
+            if 5 + i >= len(map_vanted_cols):
+                map_vanted_cols[5 + i] = [''] * 22
+            map_vanted_cols[5 + i][19] = ec
+            map_vanted_cols[5 + i][20] = 'MS'
+            map_vanted_cols[5 + i][21] = 'NSAF Score'
+            for state in all_states:
+                try:
+                    nsaf = state_ec_nsaf_dicts[state][ec]
+                except KeyError:
+                    nsaf = 0
+                map_vanted_cols[5 + i].append(str(nsaf))
+
+    #Write the Vanted-formatted tables to Excel spreadsheets
+    kegg_map_dir = os.path.join(out_dir, 'vanted_kegg_map_data')
+    if not os.path.exists(kegg_map_dir):
+        os.mkdir(kegg_map_dir)
+    total_map_nsaf_data = []
+    for map_id, vanted_map_cols in map_table_dict.items():
+        #Equalize column lengths with empty cells
+        max_len = max([len(col) for col in vanted_map_cols.values()])
+        for i, col in vanted_map_cols.items():
+            while len(col) < max_len:
+                col.append('')
+        vanted_df = pd.DataFrame(vanted_map_cols)
+        map_name = map_name_dict[map_id]
+        #Replace backslashes in Map Names, e.g., "Glycolysis / Gluconeogenesis"
+        vanted_f = map_name.replace('/', '-') + '.xlsx'
+        vanted_fp = os.path.join(kegg_map_dir, vanted_f)
+        writer = pd.ExcelWriter(vanted_fp, engine='xlsxwriter')
+        vanted_df.to_excel(writer, sheet_name='VANTED Input Form', header=False, index=False)
+        date_format = writer.book.add_format()
+        date_format.set_num_format('dd/mm/yyyy')
+        writer.sheets['VANTED Input Form'].write(3, 1, '1/1/2018', date_format)
+        writer.save()
+        #Write a table of each pathway's total score from all states into the map data directory
+        total_map_nsaf = 0
+        for state, state_map_nsaf_dict in state_map_nsaf_dicts.items():
+            try:
+                total_map_nsaf += state_map_nsaf_dict[map_id]
+            except KeyError:
+                pass
+        total_map_nsaf_data.append([map_id, map_name, total_map_nsaf])
+    total_map_nsaf_df = pd.DataFrame(
+        total_map_nsaf_data, columns=['Pathway Map', 'Pathway Map Name', 'Total Score']
+    )
+    total_map_nsaf_fp = os.path.join(kegg_map_dir, 'total_map_nsaf.tsv')
+    total_map_nsaf_df.to_csv(total_map_nsaf_fp, sep='\t', index=False)
+
+    #Write tables of NSAF values for multivariate analysis
+    nsaf_data_dir = os.path.join(out_dir, 'nsaf_data')
+    if not os.path.exists(nsaf_data_dir):
+        os.mkdir(nsaf_data_dir)
+    for prot_name, state in prot_state_dict.items():
+
+        ec_sample_nsaf_f = 'EC_NSAF.samples.tsv'
+        ec_sample_nsaf_fp = os.path.join(nsaf_data_dir, ec_sample_nsaf_f)
+        additional_df = pd.DataFrame(list(sample_ec_nsaf_dicts[prot_name].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays(
+            [[state], [prot_name]], names=['State', 'Sample']
+        )
+        if os.path.exists(ec_sample_nsaf_fp):
+            existing_df = pd.read_csv(ec_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1])
+            merged_df = pd.merge(
+                existing_df, additional_df, how='outer', left_index=True, right_index=True
+            )   
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(ec_sample_nsaf_fp, sep='\t')
+
+        map_sample_nsaf_f = 'MAP_NSAF.samples.tsv'
+        map_sample_nsaf_fp = os.path.join(nsaf_data_dir, map_sample_nsaf_f)
+        additional_df = pd.DataFrame(list(sample_map_nsaf_dicts[prot_name].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays(
+            [[state], [prot_name]], names=['State', 'Sample']
+        )
+        if os.path.exists(map_sample_nsaf_fp):
+            existing_df = pd.read_csv(map_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1])
+            merged_df = pd.merge(
+                existing_df, additional_df, how='outer', left_index=True, right_index=True
+            )   
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(map_sample_nsaf_fp, sep='\t')
+
+        gene_sample_nsaf_f = 'GENE_NSAF.samples.tsv'
+        gene_sample_nsaf_fp = os.path.join(nsaf_data_dir, gene_sample_nsaf_f)
+        additional_df = pd.DataFrame(list(sample_gene_nsaf_dicts[prot_name].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays(
+            [[state], [prot_name]], names=['State', 'Sample']
+        )
+        if os.path.exists(gene_sample_nsaf_fp):
+            existing_df = pd.read_csv(gene_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1])
+            merged_df = pd.merge(
+                existing_df, additional_df, how='outer', left_index=True, right_index=True
+            )
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(gene_sample_nsaf_fp, sep='\t')
+
+        map_plus_gene_sample_nsaf_f = 'MAP_GENE_NSAF.samples.tsv'
+        map_plus_gene_sample_nsaf_fp = os.path.join(nsaf_data_dir, map_plus_gene_sample_nsaf_f)
+        additional_df = pd.concat([
+            pd.DataFrame(list(sample_ec_nsaf_dicts[prot_name].items())).set_index(0), 
+            pd.DataFrame(list(sample_gene_wout_ec_nsaf_dicts[prot_name].items())).set_index(0)
+        ])
+        additional_df.columns = pd.MultiIndex.from_arrays(
+            [[state], [prot_name]], names=['State', 'Sample']
+        )
+        if os.path.exists(map_plus_gene_sample_nsaf_fp):
+            existing_df = pd.read_csv(
+                map_plus_gene_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1]
+            )
+            merged_df = pd.merge(
+                existing_df, additional_df, how='outer', left_index=True, right_index=True
+            )
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(map_plus_gene_sample_nsaf_fp, sep='\t')
+
+    #Sort columns to ensure that states are grouped
+    for fp in [
+        ec_sample_nsaf_fp, map_sample_nsaf_fp, gene_sample_nsaf_fp, map_plus_gene_sample_nsaf_fp
+    ]:
+        df = pd.read_csv(fp, sep='\t', index_col=0, header=[0, 1])
+        df.sort_index(axis=1, level=['State', 'Sample'], inplace=True)
+        df.to_csv(fp, sep='\t')
+
+    for state in all_states:
+
+        ec_state_nsaf_f = 'EC_NSAF.metasample.tsv'
+        ec_state_nsaf_fp = os.path.join(nsaf_data_dir, ec_state_nsaf_f)
+        additional_df = pd.DataFrame(list(state_ec_nsaf_dicts[state].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays([[state]], names=['State'])
+        if os.path.exists(ec_state_nsaf_fp):
+            existing_df = pd.read_csv(ec_state_nsaf_fp, sep='\t', index_col=0, header=0)
+            merged_df = pd.merge(existing_df, additional_df, how='outer', left_index=True, right_index=True)   
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(ec_state_nsaf_fp, sep='\t')
+
+        map_state_nsaf_f = 'MAP_NSAF.metasample.tsv'
+        map_state_nsaf_fp = os.path.join(nsaf_data_dir, map_state_nsaf_f)
+        additional_df = pd.DataFrame(list(state_map_nsaf_dicts[state].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays([[state]], names=['State'])
+        if os.path.exists(map_state_nsaf_fp):
+            existing_df = pd.read_csv(map_state_nsaf_fp, sep='\t', index_col=0, header=0)
+            merged_df = pd.merge(existing_df, additional_df, how='outer', left_index=True, right_index=True)   
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(map_state_nsaf_fp, sep='\t')
+
+        gene_state_nsaf_f = 'GENE_NSAF.metasample.tsv'
+        gene_state_nsaf_fp = os.path.join(nsaf_data_dir, gene_state_nsaf_f)
+        additional_df = pd.DataFrame(list(state_gene_nsaf_dicts[state].items())).set_index(0)
+        additional_df.columns = pd.MultiIndex.from_arrays([[state]], names=['State'])
+        if os.path.exists(gene_state_nsaf_fp):
+            existing_df = pd.read_csv(gene_state_nsaf_fp, sep='\t', index_col=0, header=0)
+            merged_df = pd.merge(existing_df, additional_df, how='outer', left_index=True, right_index=True)   
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(gene_state_nsaf_fp, sep='\t')
+
+        map_plus_gene_state_nsaf_f = 'MAP_GENE_NSAF.metasample.tsv'
+        map_plus_gene_state_nsaf_fp = os.path.join(nsaf_data_dir, map_plus_gene_state_nsaf_f)
+        additional_df = pd.concat([
+            pd.DataFrame(list(state_ec_nsaf_dicts[state].items())).set_index(0), 
+            pd.DataFrame(list(state_gene_wout_ec_nsaf_dicts[state].items())).set_index(0)
+        ])
+        additional_df.columns = pd.MultiIndex.from_arrays([[state]], names=['State'])
+        if os.path.exists(map_plus_gene_state_nsaf_fp):
+            existing_df = pd.read_csv(map_plus_gene_state_nsaf_fp, sep='\t', index_col=0, header=0)
+            merged_df = pd.merge(existing_df, additional_df, how='outer', left_index=True, right_index=True)
+        else:
+            merged_df = additional_df
+        merged_df.to_csv(map_plus_gene_state_nsaf_fp, sep='\t')
+
+    ##Temp
+    #with open(os.path.join(kegg_map_dir, 'general_data.txt'), 'w') as handle:
+    #    for state in all_states:
+    #        handle.write('Count of spectra with KEGG annotation in ' + state + ' samples: ' + str(spec_count_dict[state]) + '\n')
+    #    handle.write('\n')
+    #    for state in all_states:
+    #        handle.write('EC IDs with highest NSAF in ' + state + ' samples\n')
+    #        state_ec_score_dict = state_ec_score_dicts[state]
+    #        for t in sorted(state_ec_score_dict.items(), key=lambda t: -t[1])[81:100]:
+    #            try:
+    #                enzyme_name = kegg.kegg_list('ec:' + t[0]).readlines()[0].split('\t')[1].split(';')[0]
+    #            except:
+    #                enzyme_name = ''
+    #            handle.write(t[0] + ' ' + enzyme_name + ' ' + str(t[1]) + '\n')
+    #        handle.write('\n')
 
     return
 
@@ -601,8 +1067,8 @@ def parse_blast_table(prot_name, out_fp, blast_db_fp, postnovo_table_fp, peps_fp
     # Remove any prior entries from the proteomic dataset under consideration
     if prot_name in bin_df['qfile'].tolist():
         bin_df = bin_df[bin_df['qfile'] != prot_name]
-    blast_df['qfile'] = prot_name
-    bin_df = pd.concat([bin_df, blast_df], ignore_index=True)
+    merged_df['qfile'] = prot_name
+    bin_df = pd.concat([bin_df, merged_df], ignore_index=True)
     bin_df = bin_df[bin_table_hdrs]
     bin_df.to_csv(bin_table_fp, sep='\t', index=False)
 
@@ -930,7 +1396,7 @@ def assign_groups(assign_fp):
 
         group_df = protein_df.groupby('group').sum()
         score_df = group_df.div(group_df.max(0), axis=1)
-        propor_df.to_csv(
+        score_df.to_csv(
             os.path.join(out_dir, 'bin.group_score.' + state + '.tsv'), sep='\t'
             )
 
