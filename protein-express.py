@@ -839,8 +839,8 @@ def make_vanted_map_tables(prot_state_dict):
             merged_df = additional_df
         merged_df.to_csv(gene_sample_nsaf_fp, sep='\t')
 
-        map_plus_gene_sample_nsaf_f = 'MAP_GENE_NSAF.samples.tsv'
-        map_plus_gene_sample_nsaf_fp = os.path.join(nsaf_data_dir, map_plus_gene_sample_nsaf_f)
+        ec_plus_gene_sample_nsaf_f = 'EC_GENE_NSAF.samples.tsv'
+        ec_plus_gene_sample_nsaf_fp = os.path.join(nsaf_data_dir, ec_plus_gene_sample_nsaf_f)
         additional_df = pd.concat([
             pd.DataFrame(list(sample_ec_nsaf_dicts[prot_name].items())).set_index(0), 
             pd.DataFrame(list(sample_gene_wout_ec_nsaf_dicts[prot_name].items())).set_index(0)
@@ -848,20 +848,20 @@ def make_vanted_map_tables(prot_state_dict):
         additional_df.columns = pd.MultiIndex.from_arrays(
             [[state], [prot_name]], names=['State', 'Sample']
         )
-        if os.path.exists(map_plus_gene_sample_nsaf_fp):
+        if os.path.exists(ec_plus_gene_sample_nsaf_fp):
             existing_df = pd.read_csv(
-                map_plus_gene_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1]
+                ec_plus_gene_sample_nsaf_fp, sep='\t', index_col=0, header=[0, 1]
             )
             merged_df = pd.merge(
                 existing_df, additional_df, how='outer', left_index=True, right_index=True
             )
         else:
             merged_df = additional_df
-        merged_df.to_csv(map_plus_gene_sample_nsaf_fp, sep='\t')
+        merged_df.to_csv(ec_plus_gene_sample_nsaf_fp, sep='\t')
 
     #Sort columns to ensure that states are grouped
     for fp in [
-        ec_sample_nsaf_fp, map_sample_nsaf_fp, gene_sample_nsaf_fp, map_plus_gene_sample_nsaf_fp
+        ec_sample_nsaf_fp, map_sample_nsaf_fp, gene_sample_nsaf_fp, ec_plus_gene_sample_nsaf_fp
     ]:
         df = pd.read_csv(fp, sep='\t', index_col=0, header=[0, 1])
         df.sort_index(axis=1, level=['State', 'Sample'], inplace=True)
@@ -902,19 +902,19 @@ def make_vanted_map_tables(prot_state_dict):
             merged_df = additional_df
         merged_df.to_csv(gene_state_nsaf_fp, sep='\t')
 
-        map_plus_gene_state_nsaf_f = 'MAP_GENE_NSAF.metasample.tsv'
-        map_plus_gene_state_nsaf_fp = os.path.join(nsaf_data_dir, map_plus_gene_state_nsaf_f)
+        ec_plus_gene_state_nsaf_f = 'EC_GENE_NSAF.metasample.tsv'
+        ec_plus_gene_state_nsaf_fp = os.path.join(nsaf_data_dir, ec_plus_gene_state_nsaf_f)
         additional_df = pd.concat([
             pd.DataFrame(list(state_ec_nsaf_dicts[state].items())).set_index(0), 
             pd.DataFrame(list(state_gene_wout_ec_nsaf_dicts[state].items())).set_index(0)
         ])
         additional_df.columns = pd.MultiIndex.from_arrays([[state]], names=['State'])
-        if os.path.exists(map_plus_gene_state_nsaf_fp):
-            existing_df = pd.read_csv(map_plus_gene_state_nsaf_fp, sep='\t', index_col=0, header=0)
+        if os.path.exists(ec_plus_gene_state_nsaf_fp):
+            existing_df = pd.read_csv(ec_plus_gene_state_nsaf_fp, sep='\t', index_col=0, header=0)
             merged_df = pd.merge(existing_df, additional_df, how='outer', left_index=True, right_index=True)
         else:
             merged_df = additional_df
-        merged_df.to_csv(map_plus_gene_state_nsaf_fp, sep='\t')
+        merged_df.to_csv(ec_plus_gene_state_nsaf_fp, sep='\t')
 
     ##Temp
     #with open(os.path.join(kegg_map_dir, 'general_data.txt'), 'w') as handle:
