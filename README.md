@@ -1,12 +1,19 @@
-# protein-express
-Compare proteomic data to metagenomic bins to understand patterns 
-of protein expression across taxonomic groups and environments
+# Protein-Express
+Compare proteomic data to metagenomic bins to understand patterns of protein expression across taxonomic groups and environments
 
 ## Dependencies
-Include these in the path
-- blastp
-- makeblastdb
-- prodigal
+The following programs should be in the path.
+- [blastp](ftp://ftp.ncbi.nlm.nih.gov/blast/executables/blast+/LATEST/)
+- makeblastdb (an application within BLAST+ package)
+- [prodigal](https://github.com/hyattpd/Prodigal)
+
+## Quick Start without Environment Comparison
+This procedure analyzes one or more input metaproteomic datasets by comparison to one or more reference metagenomic(/metatranscriptomic) datasets. Metaproteomic datasets are not stratified.
+
+
+
+
+## Quick Start with Environment Comparison
 
 ## Arguments
 ### Required
